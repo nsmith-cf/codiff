@@ -1,0 +1,19 @@
+core/__tests__/codiff-cli.test.ts
+  s_00f3e393d9470d::t_535c9702ef4267 37-49,2009-2011,2019-2026
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c86c007a736ad6868a9ca1ac036f5087d7ae99ad",
+  "prompts": {},
+  "sessions": {
+    "s_00f3e393d9470d": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fa5d19330ffelBVqqSpjc5Trcl",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Smith <nsmith@cloudflare.com>"
+    }
+  }
+}

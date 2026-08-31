@@ -1,0 +1,23 @@
+core/types.ts
+  s_6cdc0eeecfd625::t_fb87e0f7a89dff 471-472
+electron/__tests__/command-line.test.ts
+  s_6cdc0eeecfd625::t_6b0de19ddc9188 25,160-172
+electron/main/command-line.cjs
+  s_6cdc0eeecfd625::t_8f185642e79d4e 148-150,260,287-290,335
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "5ab21c3e9c09c9ab968368f9106b047567cea631",
+  "prompts": {},
+  "sessions": {
+    "s_6cdc0eeecfd625": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fa6b35c42ffeXYSntvM185nSAd",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Smith <nsmith@cloudflare.com>"
+    }
+  }
+}

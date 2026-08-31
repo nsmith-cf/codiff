@@ -1,0 +1,21 @@
+core/__tests__/review-comments.test.ts
+  s_491d294b9b14c0::t_61e6a23a0a6931 4,14,71-123
+core/lib/review-comments.ts
+  s_491d294b9b14c0::t_1d1341777d28b6 2,341,346,359-382,385,387,389,396,399-405
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "60fc60cd844781d50ee36dddc3f59999a4e32939",
+  "prompts": {},
+  "sessions": {
+    "s_491d294b9b14c0": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fa6b80694ffeqMQJPfBShdVNcp",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Smith <nsmith@cloudflare.com>"
+    }
+  }
+}

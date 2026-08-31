@@ -1,0 +1,21 @@
+bin/agent-review-result.js
+  s_23757106a46572::t_f1b04336612e41 1-127
+bin/codiff.js
+  s_23757106a46572::t_a80e9b924d3394 12,361-369
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "aacab45a6dca649bcb7649c1fdde422db80f3eb8",
+  "prompts": {},
+  "sessions": {
+    "s_23757106a46572": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fa5eb815bffeVbKOc1ZXlL86Yj",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Smith <nsmith@cloudflare.com>"
+    }
+  }
+}

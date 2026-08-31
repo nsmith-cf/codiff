@@ -1,0 +1,19 @@
+electron/__tests__/agent-review-handoff.test.ts
+  s_64b69419f064a1::t_3818012e517192 1-155
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "27aa18600276bef06768a1505dbbfa4c13376222",
+  "prompts": {},
+  "sessions": {
+    "s_64b69419f064a1": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fa6a59a60ffeBt99wkXovJLtPh",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Smith <nsmith@cloudflare.com>"
+    }
+  }
+}

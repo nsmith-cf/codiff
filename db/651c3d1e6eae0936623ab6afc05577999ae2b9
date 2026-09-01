@@ -1,0 +1,19 @@
+electron/agent-feedback-adapters.cjs
+  s_1caf2e7a91db10::t_d6f57acebb5240 3-161,193
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "db651c3d1e6eae0936623ab6afc05577999ae2b9",
+  "prompts": {},
+  "sessions": {
+    "s_1caf2e7a91db10": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fa29e30aeffeQXyhYzz917jB27",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Smith <nsmith@cloudflare.com>"
+    }
+  }
+}

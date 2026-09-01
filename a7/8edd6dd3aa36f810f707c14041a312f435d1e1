@@ -1,0 +1,21 @@
+core/__tests__/codiff-cli.test.ts
+  s_00e380da60e3fc::t_d64e8f52980f0c 1198,1202,1204-1207,1209-1223
+electron/repository-state-requests.cjs
+  s_00e380da60e3fc::t_3df90b446da786 4-5,8-11,17,19-23,25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a78edd6dd3aa36f810f707c14041a312f435d1e1",
+  "prompts": {},
+  "sessions": {
+    "s_00e380da60e3fc": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fa5b92084ffethZGhjaaAyColW",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Smith <nsmith@cloudflare.com>"
+    }
+  }
+}

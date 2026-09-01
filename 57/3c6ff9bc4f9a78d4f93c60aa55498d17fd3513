@@ -1,0 +1,21 @@
+bin/__tests__/agent-feedback-bridge.test.ts
+  s_af763f342cda9b::t_6976cb8f11d6c8 1-182
+electron/agent-feedback-bridge.cjs
+  s_af763f342cda9b::t_b53a413a352a3b 1-227
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "573c6ff9bc4f9a78d4f93c60aa55498d17fd3513",
+  "prompts": {},
+  "sessions": {
+    "s_af763f342cda9b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fa2aee852ffe045y96NtZvewmO",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Smith <nsmith@cloudflare.com>"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+electron/__tests__/agent-feedback-delivery.test.ts
+  s_50aee0bad0a3c1::t_4478faf33875b9 3-9,13-14,16-23,29-66,82,86-101,103-110,112,115-123,125-126,128-134,136-137,140-151,153-154,156-176,179-186,188-240,246-256,270,275,280,284,286-287,291-292,296,306,311,316,334,339,343-348,379-387,391-396,399-401,403-405,408-425,428-431
+electron/main.cjs
+  s_50aee0bad0a3c1::t_1972d30e0d0dc8 118-119,144-145,159-163,256,952-966,997,1051,1057,1492-1494,1496,1583-1593
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1e29f68f407270687c0866701403d5cfb44f9511",
+  "prompts": {},
+  "sessions": {
+    "s_50aee0bad0a3c1": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fa2ca3666ffeMiCrKAy7kb8LFd",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Smith <nsmith@cloudflare.com>"
+    }
+  }
+}

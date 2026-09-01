@@ -1,0 +1,19 @@
+opencode/plugins/codiff.js
+  s_5d4d89d1895911::t_8d205fad002b4a 369-373
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9319f02a54a705eb86f0ee5a351ef1b6e0fdd0e6",
+  "prompts": {},
+  "sessions": {
+    "s_5d4d89d1895911": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fa78115a4ffeuoRojKqOe7mfFS",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Smith <nsmith@cloudflare.com>"
+    }
+  }
+}

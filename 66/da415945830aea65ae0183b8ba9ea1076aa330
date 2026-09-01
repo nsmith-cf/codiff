@@ -1,0 +1,19 @@
+core/App.tsx
+  s_22db9e9cebec39::t_28a806d839d86c 6,117,204,227-228,244-247,831,838-844,1644-1649,1653-1654
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "66da415945830aea65ae0183b8ba9ea1076aa330",
+  "prompts": {},
+  "sessions": {
+    "s_22db9e9cebec39": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fa2369d84ffegw5gz2A25c5RDJ",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Smith <nsmith@cloudflare.com>"
+    }
+  }
+}

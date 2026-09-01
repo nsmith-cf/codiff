@@ -1,0 +1,19 @@
+core/__tests__/App-render.test.tsx
+  s_50aee0bad0a3c1::t_7d96463a5360d5 18,481-537,539-540,542-554
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "f20639500deb7db05327063e5f66e86a659eabec",
+  "prompts": {},
+  "sessions": {
+    "s_50aee0bad0a3c1": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fa2ca3666ffeMiCrKAy7kb8LFd",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Smith <nsmith@cloudflare.com>"
+    }
+  }
+}

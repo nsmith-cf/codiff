@@ -1,0 +1,27 @@
+claude/skills/codiff/SKILL.md
+  s_22db9e9cebec39::t_6c443588df621a 103-111,145-147
+codex/skills/codiff/SKILL.md
+  s_22db9e9cebec39::t_a71366421d9d24 103-111,138-139
+electron/__tests__/agent-skills.test.ts
+  s_22db9e9cebec39::t_8849b3317eca4f 64,69-74,80-86,169-210,231-232,293-294,441,603,612-614,616-624,670,681,685,689,764
+opencode/skills/codiff/SKILL.md
+  s_22db9e9cebec39::t_c12034a24d6d1c 103-111,141-143
+pi/skills/codiff/SKILL.md
+  s_22db9e9cebec39::t_6c6e77c6c14d89 103-111,138-139
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "4a9bc9bb8ff60ecde7f170ef4d70d09b25b9673f",
+  "prompts": {},
+  "sessions": {
+    "s_22db9e9cebec39": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fa2369d84ffegw5gz2A25c5RDJ",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Smith <nsmith@cloudflare.com>"
+    }
+  }
+}

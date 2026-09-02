@@ -1,0 +1,19 @@
+electron/main/agent-skill.cjs
+  s_5d4d89d1895911::t_c032b2a3c9c1fe 25,53,82-84,96-106,217-221,223
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "d383aaf6918d916651a12fb8c1caf29b0ff6f2fc",
+  "prompts": {},
+  "sessions": {
+    "s_5d4d89d1895911": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fa78115a4ffeuoRojKqOe7mfFS",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Smith <nsmith@cloudflare.com>"
+    }
+  }
+}

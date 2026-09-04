@@ -1,0 +1,19 @@
+docs/superpowers/plans/2026-08-31-agent-review-feedback-handoff.md
+  s_f50dc3df8a568c::t_6deb7f10dc09be 64-67,190,204-206,490
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "09a1e2a028b8350521d8df4b7f224b6fe53dd3d1",
+  "prompts": {},
+  "sessions": {
+    "s_f50dc3df8a568c": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f95ec4dfdffeKcLR7N7O3V5EX1",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Smith <nsmith@cloudflare.com>"
+    }
+  }
+}

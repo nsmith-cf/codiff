@@ -1,0 +1,19 @@
+docs/superpowers/plans/2026-09-03-session-routed-agent-feedback.md
+  s_5d4d89d1895911::t_b8f52776b669e0 1-358
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2107dba124a03709c46876cb727a42a7ae16785d",
+  "prompts": {},
+  "sessions": {
+    "s_5d4d89d1895911": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_fa78115a4ffeuoRojKqOe7mfFS",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nick Smith <nsmith@cloudflare.com>"
+    }
+  }
+}

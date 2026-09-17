@@ -3,6 +3,7 @@
 .void/
 .vitest/
 .wrangler/
+.worktrees/
 **/.fate/
 **/.void/
 **/.wrangler/

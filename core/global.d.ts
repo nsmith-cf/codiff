@@ -1,7 +1,10 @@
 import type { NativeKeyboardLayout } from './config/keyboard-layout.ts';
 import type { CodiffConfig } from './config/types.ts';
 import type {
-  AgentSkillStatus,
+  AgentSkillStatusResponse,
+  AgentFeedbackDeliveryResponse,
+  AgentFeedbackDeliveryCapability,
+  AgentReviewFeedback,
   CodiffFeatureFlags,
   CodiffLaunchOptions,
   CodiffMarkdownDocument,
@@ -54,7 +57,7 @@ declare global {
       decreaseCodeFontSize: () => Promise<void>;
       dismissUpdate: () => Promise<CodiffUpdateStatus>;
       findDefinitions: (request: DefinitionSearchRequest) => Promise<DefinitionSearchResult>;
-      getAgentSkillStatus: () => Promise<AgentSkillStatus>;
+      getAgentSkillStatus: () => Promise<AgentSkillStatusResponse>;
       getConfig: () => Promise<CodiffConfig>;
       getDiffImageContent: (request: DiffImageContentRequest) => Promise<DiffImageContentResult>;
       getDiffSectionContent: (request: DiffSectionContentRequest) => Promise<DiffSection>;
@@ -77,7 +80,7 @@ declare global {
       getTerminalHelperStatus: () => Promise<TerminalHelperStatus>;
       getUpdateStatus: () => Promise<CodiffUpdateStatus>;
       increaseCodeFontSize: () => Promise<void>;
-      installAgentSkill: () => Promise<AgentSkillStatus>;
+      installAgentSkill: () => Promise<AgentSkillStatusResponse>;
       installTerminalHelper: () => Promise<TerminalHelperStatus>;
       isWindowFullScreen: () => Promise<boolean>;
       markPlanReady: () => Promise<void>;
@@ -104,12 +107,16 @@ declare global {
       openFile: (path: string, lineNumber?: number) => Promise<void>;
       openReleasePage: () => Promise<void>;
       openRepositoryFolder: () => Promise<void>;
+      refreshAgentReviewDelivery?: () => Promise<AgentFeedbackDeliveryCapability>;
       resetCodeFontSize: () => Promise<void>;
       resolvePullRequestUrl: (value: string) => Promise<string>;
       saveMarkdownDocument: (
         request: SaveMarkdownDocumentRequest,
       ) => Promise<SaveMarkdownDocumentResult>;
       savePlanReview: (review: PlanReview) => Promise<PlanReview>;
+      sendAgentReviewFeedback?: (
+        feedback: AgentReviewFeedback,
+      ) => Promise<AgentFeedbackDeliveryResponse>;
       setDiffStyle: (value: CodiffPreferences['diffStyle']) => Promise<void>;
       setShowOutdated: (value: boolean) => Promise<void>;
       setWordWrap: (value: boolean) => Promise<void>;

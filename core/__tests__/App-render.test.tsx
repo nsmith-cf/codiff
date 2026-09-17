@@ -15,12 +15,17 @@ import {
   writeReloadSelection,
 } from '../lib/reload-selection.ts';
 import type {
+  AgentBackend,
+  AgentFeedbackAssurance,
+  AgentSkillStatus,
+  AgentSkillStatusResponse,
   ChangedFile,
   CommitMetadata,
   NarrativeWalkthrough,
   PlanReview,
   RepositoryState,
   ReviewSource,
+  TerminalHelperStatus,
   WalkthroughProgressEvent,
 } from '../types.ts';
 import { createChangedFile } from './helpers/fixtures.ts';
@@ -137,6 +142,8 @@ const createCodiffMock = (overrides: Partial<Window['codiff']> = {}): Window['co
     status: 'ready' as const,
   })),
   getAgentSkillStatus: vi.fn(async () => ({
+    active: true,
+    backend: 'codex' as const,
     installed: true,
     path: '/Users/reviewer/.codex/skills/codiff',
   })),
@@ -209,6 +216,8 @@ const createCodiffMock = (overrides: Partial<Window['codiff']> = {}): Window['co
   })),
   increaseCodeFontSize: vi.fn(async () => {}),
   installAgentSkill: vi.fn(async () => ({
+    active: true,
+    backend: 'codex' as const,
     installed: true,
     path: '/Users/reviewer/.codex/skills/codiff',
   })),
@@ -236,6 +245,7 @@ const createCodiffMock = (overrides: Partial<Window['codiff']> = {}): Window['co
   openFile: vi.fn(async () => {}),
   openReleasePage: vi.fn(async () => {}),
   openRepositoryFolder: vi.fn(async () => {}),
+  refreshAgentReviewDelivery: vi.fn(async () => ({ available: true, deliveryId: 'delivery-1' })),
   resetCodeFontSize: vi.fn(async () => {}),
   resolvePullRequestUrl: vi.fn(async () => 'https://github.com/owner/repo/pull/1'),
   saveMarkdownDocument: vi.fn(async (request) => ({
@@ -249,6 +259,11 @@ const createCodiffMock = (overrides: Partial<Window['codiff']> = {}): Window['co
     status: 'saved' as const,
   })),
   savePlanReview: vi.fn(async (review) => review),
+  sendAgentReviewFeedback: vi.fn(async () => ({
+    assurance: 'transport-write' as const,
+    deliveryId: 'delivery-1',
+    status: 'accepted' as const,
+  })),
   setDiffStyle: vi.fn(async () => {}),
   setShowOutdated: vi.fn(async () => {}),
   setWordWrap: vi.fn(async () => {}),
@@ -329,6 +344,38 @@ const dispatchModifiedKey = (key: string, shiftKey = false) => {
   );
 };
 
+const findInOpenShadowRoots = <ElementType extends Element>(
+  root: ParentNode,
+  selector: string,
+): ElementType | null => {
+  const match = root.querySelector<ElementType>(selector);
+  if (match) {
+    return match;
+  }
+  for (const element of root.querySelectorAll('*')) {
+    if (element.shadowRoot) {
+      const shadowMatch = findInOpenShadowRoots<ElementType>(element.shadowRoot, selector);
+      if (shadowMatch) {
+        return shadowMatch;
+      }
+    }
+  }
+  return null;
+};
+
+const setMarkdownEditorValue = async (editor: HTMLElement, value: string) => {
+  await act(async () => {
+    editor.textContent = value;
+    editor.dispatchEvent(
+      new InputEvent('input', {
+        bubbles: true,
+        data: value,
+        inputType: 'insertText',
+      }),
+    );
+  });
+};
+
 const renderAppForOpenFileShortcut = async (file: ChangedFile) => {
   const openFile = vi.fn(async () => {});
 
@@ -362,6 +409,254 @@ const renderAppForOpenFileShortcut = async (file: ChangedFile) => {
     },
   };
 };
+
+const renderFirstRunApp = async (
+  backend: AgentBackend,
+  status: AgentSkillStatus,
+  overrides: Partial<Window['codiff']> = {},
+) => {
+  const config = createDefaultConfig();
+  config.settings.agentBackend = backend;
+  window.codiff = createCodiffMock({
+    getAgentSkillStatus: vi.fn(async () => ({ ...status, backend })),
+    getConfig: vi.fn(async () => config),
+    getLaunchOptions: vi.fn(async () => ({
+      agentBackend: backend,
+      repositoryPathProvided: false,
+      walkthrough: false,
+    })),
+    getRepositoryState: vi.fn(async () => {
+      throw new Error('fatal: not a git repository');
+    }),
+    getTerminalHelperStatus: vi.fn(async () => ({
+      command: 'codiff',
+      installed: false,
+      path: '',
+    })),
+    ...overrides,
+  });
+
+  const app = await renderReact(<App />);
+  await waitFor(() => expect(app.container.textContent).toContain('Open a Git repository'));
+  return app;
+};
+
+test.each([
+  ['claude', 'Restart Claude Code with the Codiff Channel enabled.'],
+  ['codex', 'Codex CLI 0.149.0 or newer with `codex queue` is required.'],
+  ['opencode', 'Restart OpenCode so the Codiff plugin can register this session.'],
+  ['pi', 'Restart Pi so the Codiff extension can register this session.'],
+] as const)('first-run guidance explains an inactive %s integration', async (backend, detail) => {
+  await using app = await renderFirstRunApp(backend, {
+    active: false,
+    detail,
+    installed: true,
+    path: '/installed',
+  });
+
+  expect(app.container.textContent).toContain(detail);
+  expect(app.container.textContent).toContain('is installed but inactive');
+});
+
+test('first-run guidance distinguishes active and absent integrations', async () => {
+  await using activeApp = await renderFirstRunApp('codex', {
+    active: true,
+    installed: true,
+    path: '/installed',
+  });
+  expect(activeApp.container.textContent).toContain('Codex Skill is installed and active');
+  expect(activeApp.container.textContent).not.toContain('Install Codex Skill');
+
+  await using absentApp = await renderFirstRunApp('opencode', {
+    active: false,
+    installed: false,
+    path: '',
+  });
+  expect(absentApp.container.textContent).toContain('Install OpenCode Integration');
+  expect(absentApp.container.textContent).not.toContain('installed but inactive');
+});
+
+test('repository startup does not wait for capability probes', async () => {
+  window.codiff = createCodiffMock({
+    getAgentSkillStatus: vi.fn(() => new Promise<AgentSkillStatusResponse>(() => {})),
+    getRepositoryState: vi.fn(async () => ({
+      ...repositoryState,
+      files: [createChangedFile('src/change.ts')],
+    })),
+    getTerminalHelperStatus: vi.fn(() => new Promise<TerminalHelperStatus>(() => {})),
+  });
+
+  await using app = await renderReact(<App />);
+
+  await waitFor(() => expect(app.container.querySelector('.codiff-file-header')).not.toBeNull());
+});
+
+test('status attribution waits for config hydration before rendering the saved backend', async () => {
+  let resolveConfig!: (config: ReturnType<typeof createDefaultConfig>) => void;
+  const config = new Promise<ReturnType<typeof createDefaultConfig>>((resolvePromise) => {
+    resolveConfig = resolvePromise;
+  });
+  const getAgentSkillStatus = vi
+    .fn<Window['codiff']['getAgentSkillStatus']>()
+    .mockResolvedValueOnce({
+      active: true,
+      backend: 'opencode' as const,
+      installed: true,
+      path: '/opencode',
+    })
+    .mockResolvedValueOnce({
+      active: true,
+      backend: 'opencode',
+      installed: true,
+      path: '/opencode',
+    });
+
+  await using app = await renderFirstRunApp(
+    'codex',
+    { active: false, installed: false, path: '' },
+    {
+      getAgentSkillStatus,
+      getConfig: vi.fn(() => config),
+      getLaunchOptions: vi.fn(async () => ({
+        repositoryPathProvided: false,
+        walkthrough: false,
+      })),
+    },
+  );
+
+  await waitFor(() => expect(getAgentSkillStatus).toHaveBeenCalledTimes(1));
+  expect(app.container.textContent).not.toContain('Codex Skill is installed and active');
+
+  const hydratedConfig = createDefaultConfig();
+  hydratedConfig.settings.agentBackend = 'opencode';
+  await act(async () => resolveConfig(hydratedConfig));
+
+  await waitFor(() => expect(getAgentSkillStatus).toHaveBeenCalledTimes(2));
+  await waitFor(() =>
+    expect(app.container.textContent).toContain('OpenCode Integration is installed and active'),
+  );
+});
+
+test('a stale agent status response cannot replace the status for a new backend', async () => {
+  let configListener: ((config: ReturnType<typeof createDefaultConfig>) => void) | null = null;
+  let resolveCodexStatus!: (status: AgentSkillStatusResponse) => void;
+  const codexStatus = new Promise<AgentSkillStatusResponse>((resolvePromise) => {
+    resolveCodexStatus = resolvePromise;
+  });
+  const getAgentSkillStatus = vi
+    .fn<Window['codiff']['getAgentSkillStatus']>()
+    .mockImplementationOnce(() => codexStatus)
+    .mockResolvedValueOnce({
+      active: false,
+      backend: 'opencode',
+      detail: 'Restart OpenCode so the Codiff plugin can register this session.',
+      installed: true,
+      path: '/opencode',
+    });
+  const initialConfig = createDefaultConfig();
+  const nextConfig = createDefaultConfig();
+  nextConfig.settings.agentBackend = 'opencode';
+
+  await using app = await renderFirstRunApp(
+    'codex',
+    { active: false, installed: false, path: '' },
+    {
+      getAgentSkillStatus,
+      getConfig: vi.fn(async () => initialConfig),
+      getLaunchOptions: vi.fn(async () => ({
+        repositoryPathProvided: false,
+        walkthrough: false,
+      })),
+      onConfigChanged: vi.fn((callback) => {
+        configListener = callback;
+        return () => {};
+      }),
+    },
+  );
+
+  await act(async () => configListener?.(nextConfig));
+  await waitFor(() => expect(getAgentSkillStatus).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(app.container.textContent).toContain('Restart OpenCode'));
+
+  await act(async () => {
+    resolveCodexStatus({ active: true, backend: 'codex', installed: true, path: '/codex' });
+  });
+  expect(app.container.textContent).toContain('Restart OpenCode');
+  expect(app.container.textContent).not.toContain('OpenCode Integration is installed and active');
+});
+
+test('an install response cannot replace the status after the backend changes', async () => {
+  let configListener: ((config: ReturnType<typeof createDefaultConfig>) => void) | null = null;
+  let resolveInstall!: (status: AgentSkillStatusResponse) => void;
+  const installResult = new Promise<AgentSkillStatusResponse>((resolvePromise) => {
+    resolveInstall = resolvePromise;
+  });
+  const getAgentSkillStatus = vi
+    .fn<Window['codiff']['getAgentSkillStatus']>()
+    .mockResolvedValueOnce({ active: false, backend: 'codex', installed: false, path: '' })
+    .mockResolvedValueOnce({
+      active: false,
+      backend: 'opencode',
+      detail: 'Restart OpenCode so the Codiff plugin can register this session.',
+      installed: true,
+      path: '/opencode',
+    });
+  const nextConfig = createDefaultConfig();
+  nextConfig.settings.agentBackend = 'opencode';
+
+  await using app = await renderFirstRunApp(
+    'codex',
+    { active: false, installed: false, path: '' },
+    {
+      getAgentSkillStatus,
+      getLaunchOptions: vi.fn(async () => ({
+        repositoryPathProvided: false,
+        walkthrough: false,
+      })),
+      installAgentSkill: vi.fn(() => installResult),
+      onConfigChanged: vi.fn((callback) => {
+        configListener = callback;
+        return () => {};
+      }),
+    },
+  );
+
+  const installButton = [...app.container.querySelectorAll('button')].find((button) =>
+    button.textContent?.includes('Install Codex Skill'),
+  );
+  await act(async () => installButton?.click());
+  await act(async () => configListener?.(nextConfig));
+  await waitFor(() => expect(app.container.textContent).toContain('Restart OpenCode'));
+
+  await act(async () => {
+    resolveInstall({ active: true, backend: 'codex', installed: true, path: '/codex' });
+  });
+  expect(app.container.textContent).toContain('Restart OpenCode');
+  expect(app.container.textContent).not.toContain('OpenCode Integration is installed and active');
+});
+
+test('an install response for a different backend is rejected', async () => {
+  await using app = await renderFirstRunApp(
+    'codex',
+    { active: false, installed: false, path: '' },
+    {
+      installAgentSkill: vi.fn(async () => ({
+        active: true,
+        backend: 'opencode' as const,
+        installed: true,
+        path: '/opencode',
+      })),
+    },
+  );
+
+  const installButton = [...app.container.querySelectorAll('button')].find((button) =>
+    button.textContent?.includes('Install Codex Skill'),
+  );
+  await act(async () => installButton?.click());
+
+  await waitFor(() => expect(app.container.textContent).toContain('Install Codex Skill'));
+  expect(app.container.textContent).not.toContain('Codex Skill is installed and active');
+});
 
 test('code font preferences update root CSS variables', async () => {
   const nextConfig = createDefaultConfig();
@@ -404,6 +699,367 @@ test('desktop app places the sidebar on the configured side', async () => {
     const shell = app.container.querySelector<HTMLElement>('.app-shell');
     expect(shell?.dataset.sidebarPosition).toBe('right');
     expect(shell?.style.gridTemplateColumns).toBe('minmax(0, 1fr) 0 292px');
+  });
+});
+
+test('desktop app only shows send feedback for an agent review handoff', async () => {
+  window.codiff = createCodiffMock();
+  await using defaultApp = await renderReact(<App />);
+  await waitFor(() => expect(defaultApp.container.querySelector('.loading')).toBeNull());
+  expect(defaultApp.container.querySelector('.send-feedback-button')).toBeNull();
+
+  window.codiff = createCodiffMock({
+    getLaunchOptions: vi.fn(async () => ({
+      agentReview: { deliveryId: 'delivery-1', sessionId: 'session-1' },
+      repositoryPathProvided: true,
+      walkthrough: false,
+    })),
+  });
+  await using handoffApp = await renderReact(<App />);
+  await waitFor(() => expect(handoffApp.container.querySelector('.loading')).toBeNull());
+  expect(handoffApp.container.querySelector('.send-feedback-button')).not.toBeNull();
+});
+
+test('desktop app enables send feedback after a fresh exact-session preflight succeeds', async () => {
+  const refreshAgentReviewDelivery = vi.fn(async () => ({
+    available: true,
+    deliveryId: 'delivery-1',
+  }));
+  window.codiff = createCodiffMock({
+    getLaunchOptions: vi.fn(async () => ({
+      agentReview: { deliveryId: 'delivery-1', sessionId: 'session-1' },
+      agentReviewDelivery: {
+        available: false,
+        deliveryId: 'delivery-1',
+        reason: 'Integration unavailable.',
+      },
+      repositoryPathProvided: true,
+      walkthrough: false,
+    })),
+    refreshAgentReviewDelivery,
+  });
+  await using app = await renderReact(<App />);
+  await waitFor(() => expect(app.container.querySelector('.loading')).toBeNull());
+  expect(app.container.querySelector('.send-feedback-button')).toBeNull();
+
+  await act(async () => window.dispatchEvent(new Event('focus')));
+
+  await waitFor(() => expect(refreshAgentReviewDelivery).toHaveBeenCalledOnce());
+  await waitFor(() => expect(app.container.querySelector('.send-feedback-button')).not.toBeNull());
+});
+
+test('desktop app ignores an older agent review delivery refresh result', async () => {
+  let resolveFirst!: (value: { available: boolean; deliveryId: string; reason?: string }) => void;
+  let resolveSecond!: (value: { available: boolean; deliveryId: string }) => void;
+  const refreshAgentReviewDelivery = vi
+    .fn<NonNullable<Window['codiff']['refreshAgentReviewDelivery']>>()
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        }),
+    )
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSecond = resolve;
+        }),
+    );
+  window.codiff = createCodiffMock({
+    getLaunchOptions: vi.fn(async () => ({
+      agentReview: { deliveryId: 'delivery-1', sessionId: 'session-1' },
+      agentReviewDelivery: { available: false, deliveryId: 'delivery-1' },
+      repositoryPathProvided: true,
+      walkthrough: false,
+    })),
+    refreshAgentReviewDelivery,
+  });
+  await using app = await renderReact(<App />);
+  await waitFor(() => expect(app.container.querySelector('.loading')).toBeNull());
+
+  await act(async () => window.dispatchEvent(new Event('focus')));
+  await act(async () => window.dispatchEvent(new Event('focus')));
+  await waitFor(() => expect(refreshAgentReviewDelivery).toHaveBeenCalledTimes(2));
+  resolveSecond({ available: true, deliveryId: 'delivery-1' });
+  await waitFor(() => expect(app.container.querySelector('.send-feedback-button')).not.toBeNull());
+  await act(async () =>
+    resolveFirst({ available: false, deliveryId: 'delivery-1', reason: 'stale result' }),
+  );
+
+  expect(app.container.querySelector('.send-feedback-button')).not.toBeNull();
+});
+
+test('desktop app preserves refreshed delivery availability while repository state loads', async () => {
+  let resolveRepositoryState!: (value: typeof repositoryState) => void;
+  const getRepositoryState = vi.fn(
+    () =>
+      new Promise<typeof repositoryState>((resolve) => {
+        resolveRepositoryState = resolve;
+      }),
+  );
+  const refreshAgentReviewDelivery = vi.fn(async () => ({
+    available: true,
+    deliveryId: 'delivery-1',
+  }));
+  window.codiff = createCodiffMock({
+    getLaunchOptions: vi.fn(async () => ({
+      agentReview: { deliveryId: 'delivery-1', sessionId: 'session-1' },
+      agentReviewDelivery: { available: false, deliveryId: 'delivery-1' },
+      repositoryPathProvided: true,
+      walkthrough: false,
+    })),
+    getRepositoryState,
+    refreshAgentReviewDelivery,
+  });
+  await using app = await renderReact(<App />);
+  await waitFor(() => expect(getRepositoryState).toHaveBeenCalledOnce());
+
+  await act(async () => window.dispatchEvent(new Event('focus')));
+  await waitFor(() => expect(refreshAgentReviewDelivery).toHaveBeenCalledOnce());
+  await act(async () => resolveRepositoryState(repositoryState));
+  await waitFor(() => expect(app.container.querySelector('.loading')).toBeNull());
+
+  expect(app.container.querySelector('.send-feedback-button')).not.toBeNull();
+});
+
+test('desktop app hides send feedback when the agent review IPC is unavailable', async () => {
+  const codiff = createCodiffMock({
+    getLaunchOptions: vi.fn(async () => ({
+      agentReview: { deliveryId: 'delivery-1', sessionId: 'session-1' },
+      repositoryPathProvided: true,
+      walkthrough: false,
+    })),
+  });
+  Reflect.deleteProperty(codiff, 'sendAgentReviewFeedback');
+  window.codiff = codiff;
+
+  await using app = await renderReact(<App />);
+  await waitFor(() => expect(app.container.querySelector('.loading')).toBeNull());
+
+  expect(app.container.querySelector('.send-feedback-button')).toBeNull();
+});
+
+test.each([
+  ['claude', 'transport-write'],
+  ['codex', 'queue-command'],
+  ['opencode', 'bridge-queue'],
+  ['opencode', 'message-created'],
+  ['pi', 'dispatch-started'],
+] as const satisfies ReadonlyArray<readonly [AgentBackend, AgentFeedbackAssurance]>)(
+  'agent review feedback accepts %s assurance %s for a focused draft',
+  async (agentBackend, assurance) => {
+    const file = createChangedFile('src/app.ts');
+    const sendAgentReviewFeedback = vi.fn(async () => ({
+      assurance,
+      deliveryId: 'delivery-1',
+      status: 'accepted' as const,
+    }));
+    window.codiff = createCodiffMock({
+      getLaunchOptions: vi.fn(async () => ({
+        agentBackend,
+        agentReview: { deliveryId: 'delivery-1', sessionId: 'session-1' },
+        repositoryPathProvided: true,
+        walkthrough: false,
+      })),
+      getRepositoryState: vi.fn(async () => ({ ...repositoryState, files: [file] })),
+      sendAgentReviewFeedback,
+    });
+    await using app = await renderReact(<App />);
+    await waitFor(() => expect(app.container.querySelector('.codiff-file-header')).not.toBeNull());
+
+    const getLine = () =>
+      findInOpenShadowRoots<HTMLElement>(
+        app.container,
+        '[data-line="1"][data-line-type="change-addition"]',
+      );
+    await waitFor(() => expect(getLine()).not.toBeNull());
+    await act(async () => getLine()?.click());
+    await waitFor(() =>
+      expect(
+        app.container.querySelector<HTMLElement>(
+          '[contenteditable="true"][aria-label^="Comment on"]',
+        ),
+      ).not.toBeNull(),
+    );
+    const editor = app.container.querySelector<HTMLElement>(
+      '[contenteditable="true"][aria-label^="Comment on"]',
+    );
+    if (!editor) {
+      throw new Error('Expected review comment editor.');
+    }
+    await act(async () => editor.focus());
+    await setMarkdownEditorValue(editor, 'Focused feedback');
+
+    await waitFor(() =>
+      expect(
+        app.container.querySelector<HTMLButtonElement>('.send-feedback-button')?.disabled,
+      ).toBe(false),
+    );
+    const send = app.container.querySelector<HTMLButtonElement>('.send-feedback-button');
+    await act(async () => send?.click());
+    await waitFor(() => expect(sendAgentReviewFeedback).toHaveBeenCalledOnce());
+    expect(await sendAgentReviewFeedback.mock.results[0]?.value).toMatchObject({ assurance });
+    await waitFor(() => expect(send?.disabled).toBe(false));
+    expect(sendAgentReviewFeedback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        comments: [expect.objectContaining({ body: 'Focused feedback', filePath: 'src/app.ts' })],
+        repository: {
+          root: '/repo',
+          source: { type: 'working-tree' },
+        },
+        version: 1,
+      }),
+    );
+    expect(editor.textContent).toBe('Focused feedback');
+  },
+);
+
+test('agent review feedback preserves the same focused draft after rejection and IPC failure', async () => {
+  const sendAgentReviewFeedback = vi
+    .fn()
+    .mockResolvedValueOnce({
+      deliveryId: 'delivery-1',
+      reason: 'Session is busy.',
+      status: 'rejected' as const,
+    })
+    .mockRejectedValueOnce(new Error('Bridge unavailable.'))
+    .mockResolvedValueOnce({
+      assurance: 'transport-write',
+      deliveryId: 'delivery-1',
+      status: 'accepted' as const,
+    });
+  const file = createChangedFile('src/app.ts');
+  window.codiff = createCodiffMock({
+    getLaunchOptions: vi.fn(async () => ({
+      agentBackend: 'codex' as const,
+      agentReview: { deliveryId: 'delivery-1', sessionId: 'session-1' },
+      repositoryPathProvided: true,
+      walkthrough: false,
+    })),
+    getRepositoryState: vi.fn(async () => ({ ...repositoryState, files: [file] })),
+    sendAgentReviewFeedback,
+  });
+  await using app = await renderReact(<App />);
+  await waitFor(() => expect(app.container.querySelector('.codiff-file-header')).not.toBeNull());
+
+  const getLine = () =>
+    findInOpenShadowRoots<HTMLElement>(
+      app.container,
+      '[data-line="1"][data-line-type="change-addition"]',
+    );
+  await waitFor(() => expect(getLine()).not.toBeNull());
+  await act(async () => getLine()?.click());
+  await waitFor(() =>
+    expect(
+      app.container.querySelector<HTMLElement>(
+        '[contenteditable="true"][aria-label^="Comment on"]',
+      ),
+    ).not.toBeNull(),
+  );
+  const editor = app.container.querySelector<HTMLElement>(
+    '[contenteditable="true"][aria-label^="Comment on"]',
+  );
+  if (!editor) {
+    throw new Error('Expected review comment editor.');
+  }
+  await act(async () => editor.focus());
+  await setMarkdownEditorValue(editor, 'Keep this feedback');
+  await waitFor(() =>
+    expect(app.container.querySelector<HTMLButtonElement>('.send-feedback-button')?.disabled).toBe(
+      false,
+    ),
+  );
+  const send = app.container.querySelector<HTMLButtonElement>('.send-feedback-button');
+  for (const error of [
+    'Session is busy.',
+    'Bridge unavailable.',
+    'Agent feedback acknowledgement is invalid.',
+  ]) {
+    await act(async () => send?.click());
+    await waitFor(() =>
+      expect(app.container.querySelector('[role="alert"]')?.textContent).toBe(error),
+    );
+    expect(app.container.querySelector('[contenteditable="true"][aria-label^="Comment on"]')).toBe(
+      editor,
+    );
+    expect(editor.textContent).toBe('Keep this feedback');
+    expect(send?.disabled).toBe(false);
+  }
+});
+
+test('agent review feedback is disabled and guarded while switching sources', async () => {
+  const file = createChangedFile('src/app.ts');
+  const sendAgentReviewFeedback = vi.fn(async () => ({
+    assurance: 'transport-write' as const,
+    deliveryId: 'delivery-1',
+    status: 'accepted' as const,
+  }));
+  const openReviewSourceListeners: Array<Parameters<Window['codiff']['onOpenReviewSource']>[0]> =
+    [];
+  let resolveSwitch!: (state: RepositoryState) => void;
+  const switchState = new Promise<RepositoryState>((resolvePromise) => {
+    resolveSwitch = resolvePromise;
+  });
+  const getRepositoryState = vi.fn(async (source?: ReviewSource) =>
+    source ? switchState : Promise.resolve({ ...repositoryState, files: [file] }),
+  );
+  window.codiff = createCodiffMock({
+    getLaunchOptions: vi.fn(async () => ({
+      agentReview: { deliveryId: 'delivery-1', sessionId: 'session-1' },
+      repositoryPathProvided: true,
+      walkthrough: false,
+    })),
+    getRepositoryState,
+    onOpenReviewSource: vi.fn((callback) => {
+      openReviewSourceListeners.push(callback);
+      return () => {};
+    }),
+    sendAgentReviewFeedback,
+  });
+  await using app = await renderReact(<App />);
+  await waitFor(() => expect(app.container.querySelector('.codiff-file-header')).not.toBeNull());
+
+  const getLine = () =>
+    findInOpenShadowRoots<HTMLElement>(
+      app.container,
+      '[data-line="1"][data-line-type="change-addition"]',
+    );
+  await waitFor(() => expect(getLine()).not.toBeNull());
+  await act(async () => getLine()?.click());
+  await waitFor(() => {
+    expect(
+      app.container.querySelector<HTMLElement>(
+        '[contenteditable="true"][aria-label^="Comment on"]',
+      ),
+    ).not.toBeNull();
+  });
+  const editor = app.container.querySelector<HTMLElement>(
+    '[contenteditable="true"][aria-label^="Comment on"]',
+  )!;
+  await setMarkdownEditorValue(editor, 'Feedback for the old source');
+  await waitFor(() =>
+    expect(app.container.querySelector<HTMLButtonElement>('.send-feedback-button')?.disabled).toBe(
+      false,
+    ),
+  );
+  const send = app.container.querySelector<HTMLButtonElement>('.send-feedback-button')!;
+
+  await act(async () => openReviewSourceListeners[0]?.('branch'));
+  const input = app.container.querySelector<HTMLInputElement>('#open-review-source-input')!;
+  const form = app.container.querySelector('form.open-review-source-dialog')!;
+  await setInputValue(input, 'next-branch');
+  await act(async () => {
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  });
+
+  await waitFor(() => expect(send.disabled).toBe(true));
+  await act(async () => send.click());
+  expect(sendAgentReviewFeedback).not.toHaveBeenCalled();
+
+  resolveSwitch({
+    ...repositoryState,
+    files: [file],
+    source: { baseRef: 'base', headRef: 'head', ref: 'next-branch', type: 'branch-working-tree' },
   });
 });
 

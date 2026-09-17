@@ -3,7 +3,7 @@ import { ClockCounterClockwiseIcon as ClockCounterClockwise } from '@phosphor-ic
 import { PathIcon as Path } from '@phosphor-icons/react/Path';
 import { TreeStructureIcon as TreeStructure } from '@phosphor-icons/react/TreeStructure';
 import type { FileDiffLoadedFiles } from '@pierre/diffs';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { CommandBar } from './app/components/CommandBar.tsx';
 import { KeyboardShortcutsHelp } from './app/components/KeyboardShortcutsHelp.tsx';
 import { OpenReviewSourceDialog } from './app/components/OpenReviewSourceDialog.tsx';
@@ -18,6 +18,7 @@ import {
   RepositoryChangeBanner,
   RepositoryLoadErrorPanel,
   ReviewSourceLoading,
+  SendFeedbackButton,
   UpdatePill,
   WalkthroughOutdatedBanner,
 } from './app/components/Panels.tsx';
@@ -84,6 +85,7 @@ import {
 } from './lib/reload-selection.ts';
 import { resolveReviewCommandTarget } from './lib/review-command-target.ts';
 import {
+  buildAgentReviewFeedback,
   buildReviewCommentsMarkdown,
   getRefreshedReviewComments,
   getReviewCommentsFromState,
@@ -110,8 +112,10 @@ import {
 } from './lib/source.ts';
 import { readViewed, writeViewed } from './lib/viewed.ts';
 import type {
+  AgentBackend,
+  AgentFeedbackAssurance,
   ChangedFile,
-  AgentSkillStatus,
+  AgentSkillStatusResponse,
   CodiffLaunchOptions,
   CodiffMarkdownDocument,
   CodiffPreferences,
@@ -129,6 +133,12 @@ import type {
 const emptyReviewComments: ReadonlyArray<ReviewComment> = [];
 const emptyWalkthroughNotes = new Map<string, WalkthroughNote>();
 const disableCodeViewWorkerPool = process.env.NODE_ENV === 'test';
+const agentFeedbackAssurances: Record<AgentBackend, ReadonlySet<AgentFeedbackAssurance>> = {
+  claude: new Set(['transport-write']),
+  codex: new Set(['queue-command']),
+  opencode: new Set(['bridge-queue', 'message-created']),
+  pi: new Set(['dispatch-started']),
+};
 
 const getFailedSectionLoadState = (section: DiffSection): DiffSection =>
   isPatchOnlyDiffSection(section)
@@ -192,8 +202,7 @@ export default function App() {
   const [launchOptions, setLaunchOptions] = useState<CodiffLaunchOptions>(defaultLaunchOptions);
   const [codiffConfig, setCodiffConfig] = useState<CodiffConfig>(createDefaultConfig);
   const [agentSkillInstalling, setAgentSkillInstalling] = useState(false);
-  const [agentSkillStatus, setAgentSkillStatus] =
-    useState<AgentSkillStatus>(defaultAgentSkillStatus);
+  const [agentSkillResult, setAgentSkillResult] = useState<AgentSkillStatusResponse | null>(null);
   const [preferences, setPreferences] = useState<CodiffPreferences>(defaultPreferences);
   const [reloadDeltaPaths, setReloadDeltaPaths] = useState<ReadonlySet<string>>(() => new Set());
   const [scrollTarget, setScrollTarget] = useState<ReviewScrollTarget | null>(null);
@@ -214,6 +223,12 @@ export default function App() {
     defaultTerminalHelperStatus,
   );
   const [sharePlanEnabled, setSharePlanEnabled] = useState(false);
+  const activeAgentBackend = launchOptions.agentBackend ?? codiffConfig.settings.agentBackend;
+  const agentSkillStatus =
+    agentSkillResult?.backend === activeAgentBackend ? agentSkillResult : defaultAgentSkillStatus;
+  const activeAgentBackendRef = useRef(activeAgentBackend);
+  const agentReviewDeliveryRequestRef = useRef(0);
+  const agentSkillRequestRef = useRef(0);
   const historyRequestRef = useRef(0);
   const historySourceRef = useRef<ReviewSource | null>(null);
   const loadingSectionKeysRef = useRef<Set<string>>(new Set());
@@ -228,6 +243,10 @@ export default function App() {
   const sourceRequestRef = useRef(0);
   const stateGenerationRef = useRef(0);
   const markdownRefreshQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  useLayoutEffect(() => {
+    activeAgentBackendRef.current = activeAgentBackend;
+  }, [activeAgentBackend]);
   const viewedRef = useRef<Record<string, string>>({});
   const persistViewed = useCallback((nextViewed: Record<string, string>) => {
     const currentState = stateRef.current;
@@ -267,9 +286,11 @@ export default function App() {
     askCodex,
     createComment,
     deleteComment,
+    flushActiveReviewCommentDraft,
     focusCommentId,
     focusCommentRequest,
     hasPendingReviewComments,
+    pendingReviewCommentCount,
     pullRequestReviewSubmitting,
     resetCommentFocus,
     reviewComments,
@@ -638,22 +659,6 @@ export default function App() {
         return;
       }
 
-      const nextAgentSkillStatus = await window.codiff
-        .getAgentSkillStatus()
-        .catch(() => defaultAgentSkillStatus);
-      if (canceled) {
-        return;
-      }
-      setAgentSkillStatus(nextAgentSkillStatus);
-
-      const nextTerminalHelperStatus = await window.codiff
-        .getTerminalHelperStatus()
-        .catch(() => defaultTerminalHelperStatus);
-      if (canceled) {
-        return;
-      }
-      setTerminalHelperStatus(nextTerminalHelperStatus);
-
       const nextState = await window.codiff.getRepositoryState(
         getReloadSourceForLaunch(reloadSelection, nextLaunchOptions),
       );
@@ -692,7 +697,6 @@ export default function App() {
       const shouldStartInHistory =
         shouldStartInHistoryWhenEmpty(orderedState.source) && orderedState.files.length === 0;
 
-      setLaunchOptions(nextLaunchOptions);
       setSidebarMode(
         shouldLoadNarrative ? 'walkthrough' : shouldStartInHistory ? 'history' : 'tree',
       );
@@ -822,6 +826,48 @@ export default function App() {
       }),
     [],
   );
+
+  useEffect(() => {
+    let canceled = false;
+    const expectedBackend = activeAgentBackend;
+    const request = agentSkillRequestRef.current + 1;
+    agentSkillRequestRef.current = request;
+
+    void window.codiff
+      .getAgentSkillStatus()
+      .then((status) => {
+        if (
+          !canceled &&
+          agentSkillRequestRef.current === request &&
+          status.backend === expectedBackend &&
+          activeAgentBackendRef.current === expectedBackend
+        ) {
+          setAgentSkillResult(status);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      canceled = true;
+    };
+  }, [activeAgentBackend]);
+
+  useEffect(() => {
+    let canceled = false;
+
+    void window.codiff
+      .getTerminalHelperStatus()
+      .then((status) => {
+        if (!canceled) {
+          setTerminalHelperStatus(status);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      canceled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let canceled = false;
@@ -1589,21 +1635,110 @@ export default function App() {
   }, []);
 
   const installAgentSkill = useCallback(() => {
+    const backend = activeAgentBackend;
+    const request = agentSkillRequestRef.current + 1;
+    agentSkillRequestRef.current = request;
     setAgentSkillInstalling(true);
     window.codiff
       .installAgentSkill()
-      .then((status) => setAgentSkillStatus(status))
+      .then((status) => {
+        if (
+          agentSkillRequestRef.current === request &&
+          status.backend === backend &&
+          activeAgentBackendRef.current === backend
+        ) {
+          setAgentSkillResult(status);
+        }
+      })
       .catch(() => {
-        setAgentSkillStatus(defaultAgentSkillStatus);
+        if (agentSkillRequestRef.current === request && activeAgentBackendRef.current === backend) {
+          setAgentSkillResult(null);
+        }
       })
       .finally(() => {
         setAgentSkillInstalling(false);
       });
-  }, []);
+  }, [activeAgentBackend]);
 
-  const activeAgentBackend = launchOptions.agentBackend ?? codiffConfig.settings.agentBackend;
   const agentLabel = getAgentLabel(activeAgentBackend);
-  const agentSkillLabel = `${agentLabel} Skill`;
+  const agentSkillLabel = `${agentLabel} ${activeAgentBackend === 'codex' ? 'Skill' : 'Integration'}`;
+  useEffect(() => {
+    const deliveryId = launchOptions.agentReview?.deliveryId;
+    const refreshDelivery = window.codiff.refreshAgentReviewDelivery;
+    if (!deliveryId || typeof refreshDelivery !== 'function') {
+      return;
+    }
+
+    let canceled = false;
+    const refresh = () => {
+      const request = ++agentReviewDeliveryRequestRef.current;
+      void refreshDelivery()
+        .then((capability) => {
+          if (
+            canceled ||
+            request !== agentReviewDeliveryRequestRef.current ||
+            capability.deliveryId !== deliveryId
+          ) {
+            return;
+          }
+          setLaunchOptions((current) =>
+            current.agentReview?.deliveryId === deliveryId
+              ? { ...current, agentReviewDelivery: capability }
+              : current,
+          );
+        })
+        .catch(() => {});
+    };
+    window.addEventListener('focus', refresh);
+    return () => {
+      canceled = true;
+      window.removeEventListener('focus', refresh);
+    };
+  }, [launchOptions.agentReview?.deliveryId]);
+  const sendAgentReviewFeedback = useCallback(async () => {
+    if (pendingSource != null) {
+      return;
+    }
+    const deliverFeedback = window.codiff.sendAgentReviewFeedback;
+    if (typeof deliverFeedback !== 'function') {
+      return;
+    }
+    const comments = flushActiveReviewCommentDraft();
+    const content = buildAgentReviewFeedback(
+      stateRef.current!.files,
+      comments,
+      preferencesRef.current.showWhitespace,
+      preferencesRef.current.reviewCommentsPrefix,
+    );
+    if (content.comments.length === 0) {
+      return;
+    }
+    const response = await deliverFeedback({
+      ...content,
+      repository: {
+        root: stateRef.current!.root,
+        source: stateRef.current!.source,
+      },
+      version: 1,
+    });
+    if (response.deliveryId !== launchOptions.agentReview?.deliveryId) {
+      throw new Error('Agent feedback acknowledgement has the wrong delivery ID.');
+    }
+    if (response.status === 'rejected') {
+      throw new Error(response.reason);
+    }
+    if (
+      !['accepted', 'queued', 'already-accepted'].includes(response.status) ||
+      !agentFeedbackAssurances[activeAgentBackend].has(response.assurance)
+    ) {
+      throw new Error('Agent feedback acknowledgement is invalid.');
+    }
+  }, [
+    activeAgentBackend,
+    flushActiveReviewCommentDraft,
+    launchOptions.agentReview?.deliveryId,
+    pendingSource,
+  ]);
 
   if (launchOptions.planFile) {
     if (planLoadError) {
@@ -1634,6 +1769,8 @@ export default function App() {
         <div className="empty-panel squircle">
           {showFirstRun ? (
             <FirstRunPanel
+              agentSkillActive={agentSkillStatus.active}
+              agentSkillDetail={agentSkillStatus.detail}
               agentSkillInstalled={agentSkillStatus.installed}
               agentSkillInstalling={agentSkillInstalling}
               agentSkillLabel={agentSkillLabel}
@@ -1821,12 +1958,23 @@ export default function App() {
       <div aria-hidden className="window-drag-region" />
       <ReviewTopBar
         actions={
-          <CopyCommentsButton
-            comments={isSwitchingSource ? emptyReviewComments : reviewComments}
-            files={orderedFiles}
-            reviewCommentsPrefix={preferences.reviewCommentsPrefix}
-            showWhitespace={showWhitespace}
-          />
+          <>
+            <CopyCommentsButton
+              comments={isSwitchingSource ? emptyReviewComments : reviewComments}
+              files={orderedFiles}
+              reviewCommentsPrefix={preferences.reviewCommentsPrefix}
+              showWhitespace={showWhitespace}
+            />
+            {launchOptions.agentReview &&
+            launchOptions.agentReviewDelivery?.available !== false &&
+            typeof window.codiff.sendAgentReviewFeedback === 'function' ? (
+              <SendFeedbackButton
+                count={pendingReviewCommentCount}
+                disabled={isSwitchingSource}
+                onSend={sendAgentReviewFeedback}
+              />
+            ) : null}
+          </>
         }
         context={
           <>

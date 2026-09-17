@@ -78,6 +78,18 @@ export const flagDefinitions = [
     type: 'boolean',
   },
   {
+    argument: '<file>',
+    hidden: true,
+    name: 'agent-review-open-file',
+    type: 'string',
+  },
+  {
+    argument: '<id>',
+    hidden: true,
+    name: 'agent-review-delivery',
+    type: 'string',
+  },
+  {
     description: 'Show version number and exit.',
     name: 'version',
     short: 'v',
@@ -335,6 +347,13 @@ export const parseArguments = (args) => {
     typeof values['opencode-session'] === 'string' ? values['opencode-session'] : null;
   const piSessionId = typeof values['pi-session'] === 'string' ? values['pi-session'] : null;
   const planFilePath = typeof values.plan === 'string' ? values.plan : null;
+  const agentReviewDeliveryId =
+    typeof values['agent-review-delivery'] === 'string' ? values['agent-review-delivery'] : null;
+  const agentReviewOpenFilePath =
+    typeof values['agent-review-open-file'] === 'string' ? values['agent-review-open-file'] : null;
+  if (Boolean(agentReviewDeliveryId) !== Boolean(agentReviewOpenFilePath)) {
+    throw new Error('Agent review delivery and open file options must be used together.');
+  }
   // `--completions` without a value parses as `true`; keep it as an empty shell
   // so the command can tell "no shell given" apart from "flag not used".
   const completionShell =
@@ -350,6 +369,22 @@ export const parseArguments = (args) => {
     values.agent === 'pi'
       ? values.agent
       : null;
+  const agentReviewSessionId =
+    agentBackend === 'codex'
+      ? codexSessionId
+      : agentBackend === 'claude'
+        ? claudeSessionId
+        : agentBackend === 'opencode'
+          ? opencodeSessionId
+          : agentBackend === 'pi'
+            ? piSessionId
+            : null;
+  if (agentReviewDeliveryId && !agentReviewSessionId) {
+    throw new Error('Agent review delivery requires a matching agent backend and session.');
+  }
+  if (agentReviewDeliveryId && planFilePath) {
+    throw new Error('Plan and agent review handoffs cannot be used together.');
+  }
   let pullRequestBranch = null;
   let pullRequestNumber = null;
   let pullRequestProvider = null;
@@ -449,6 +484,12 @@ export const parseArguments = (args) => {
 
   return {
     ...(agentBackend ? { agentBackend } : {}),
+    ...(agentReviewDeliveryId && agentReviewOpenFilePath && agentReviewSessionId
+      ? {
+          agentReview: { deliveryId: agentReviewDeliveryId, sessionId: agentReviewSessionId },
+          agentReviewOpenFilePath: resolve(agentReviewOpenFilePath),
+        }
+      : {}),
     ...(claudeSessionId ? { claudeSessionId } : {}),
     ...(codexSessionId ? { codexSessionId } : {}),
     ...(opencodeSessionId ? { opencodeSessionId } : {}),

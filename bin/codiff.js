@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import packageJson from '../package.json' with { type: 'json' };
+import { waitForAgentReviewOpen } from './agent-review-launch.js';
 import {
   formatHelpText,
   getReviewSource,
@@ -174,6 +175,8 @@ const run = async () => {
 
   const {
     agentBackend,
+    agentReview,
+    agentReviewOpenFilePath,
     branchRef,
     claudeSessionId,
     codexSessionId,
@@ -300,6 +303,8 @@ const run = async () => {
   const childEnv = {
     ...process.env,
     CODIFF_AGENT_BACKEND: agentBackend ?? '',
+    CODIFF_AGENT_REVIEW_DELIVERY_ID: agentReview?.deliveryId ?? '',
+    CODIFF_AGENT_REVIEW_OPEN_FILE: agentReviewOpenFilePath ?? '',
     CODIFF_BRANCH_REF: branchRef ?? '',
     CODIFF_CLAUDE_SESSION_ID: claudeSessionId ?? '',
     CODIFF_COMMIT_REF: commitRef ?? '',
@@ -354,6 +359,15 @@ const run = async () => {
       process.exitCode = 1;
     } finally {
       rmSync(planResultDirectory, { force: true, recursive: true });
+    }
+  } else if (agentReview && agentReviewOpenFilePath) {
+    try {
+      await waitForAgentReviewOpen(agentReviewOpenFilePath, agentReview.deliveryId);
+    } catch (error) {
+      process.stderr.write(
+        `${error instanceof Error ? error.message : 'Codiff did not open the review.'}\n`,
+      );
+      process.exitCode = 1;
     }
   }
 };

@@ -8,6 +8,31 @@ resolves hunk ids on load, and renders the real current diff.
 Write the JSON document to a **temporary file outside the repository** and pass it to
 Codiff with `--walkthrough-file`.
 
+## Agent Review Handoff
+
+For a desktop agent handoff, run the launcher normally. It returns after printing
+`Codiff opened. Review feedback will arrive as a separate message in this session.` Stop waiting at
+that confirmation; do not wait for Codiff to close or parse terminal output for review comments. A
+normal close sends no feedback and requires no feedback-driven edits.
+
+When Codiff later sends review feedback, treat it as a new user request in this same session. Address every comment in order. Do not automatically reopen Codiff after handling the feedback.
+Use each comment's file, line or range anchor, and diff context. Ask one focused question if feedback
+is materially ambiguous, then summarize the feedback handled and decide whether another review
+would be useful.
+
+**Send feedback** appears only for agent-launched desktop handoffs and is disabled when there is no
+feedback. Submission includes the focused comment draft without requiring blur. Successful
+submission closes Codiff, and the agent receives the comments as a separate user message. If
+submission fails, Codiff remains open and the window, comments, and draft stay intact for retry.
+
+Backend delivery assurances differ: Codex confirms that its queue command accepted the message;
+Claude Code confirms only the Channel transport write; OpenCode confirms either insertion into its
+session-local in-memory FIFO or creation of the user message; and Pi confirms that dispatch started.
+None confirms that the agent processed the feedback. OpenCode's FIFO is not durable and is lost if
+the OpenCode process restarts.
+
+## Authoring The Walkthrough
+
 Default to the **staged** diff (`git diff --staged`). If the user named a target, use that:
 a commit, branch, pull request, ref range, or repository path. If nothing is staged, fall back
 to the working tree (`git diff`) and say so. Anchor every `hunkId` against whichever diff you

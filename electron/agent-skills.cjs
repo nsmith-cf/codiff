@@ -4,6 +4,7 @@
  * @typedef {'codex' | 'claude' | 'opencode' | 'pi'} AgentSkillId
  * @typedef {{
  *   legacyManagedMarkers?: ReadonlyArray<string>;
+ *   legacyManagedSourceSubdirs?: ReadonlyArray<string>;
  *   managedMarker: string;
  *   sourceSubdir: string;
  *   targetSubdir: string;
@@ -13,7 +14,12 @@
  *   files?: ReadonlyArray<AgentSkillFile>;
  *   id: AgentSkillId;
  *   label: string;
- *   targets: ReadonlyArray<{sourceSubdir: string; targetSubdir: string}>;
+ *   successDetail?: string;
+ *   targets: ReadonlyArray<{
+ *     sourceSubdir: string;
+ *     targetSubdir: string;
+ *     type: 'directory' | 'file';
+ *   }>;
  * }} AgentSkill
  */
 
@@ -23,23 +29,61 @@ const AGENT_SKILLS = Object.freeze([
     agentLabel: 'Codex',
     id: 'codex',
     label: 'Codex Skill',
-    targets: [{ sourceSubdir: 'codex/skills/codiff', targetSubdir: '.codex/skills/codiff' }],
+    targets: [
+      {
+        sourceSubdir: 'codex/skills/codiff',
+        targetSubdir: '.codex/skills/codiff',
+        type: 'directory',
+      },
+    ],
   },
   {
     agentLabel: 'Claude Code',
     id: 'claude',
-    label: 'Claude Code Skill',
-    targets: [{ sourceSubdir: 'claude/skills/codiff', targetSubdir: '.claude/skills/codiff' }],
+    label: 'Claude Code Integration',
+    successDetail:
+      'Restart Claude Code with the installed Channel enabled. Codiff can confirm transport write only, not that Claude processed the feedback.',
+    targets: [
+      {
+        sourceSubdir: 'claude/skills/codiff',
+        targetSubdir: '.claude/skills/codiff',
+        type: 'directory',
+      },
+      {
+        sourceSubdir: 'claude/channel/codiff',
+        targetSubdir: '.claude/plugins/codiff-channel',
+        type: 'directory',
+      },
+    ],
   },
   {
     agentLabel: 'Pi',
     id: 'pi',
-    label: 'Pi Skill',
-    targets: [{ sourceSubdir: 'pi/skills/codiff', targetSubdir: '.pi/agent/skills/codiff' }],
+    label: 'Pi Integration',
+    successDetail:
+      'Restart Pi to enable the installed extension. Codiff confirms dispatch started, not that Pi processed the feedback.',
+    targets: [
+      {
+        sourceSubdir: 'pi/skills/codiff',
+        targetSubdir: '.pi/agent/skills/codiff',
+        type: 'directory',
+      },
+      {
+        sourceSubdir: 'pi/extensions/codiff',
+        targetSubdir: '.pi/agent/extensions/codiff',
+        type: 'directory',
+      },
+    ],
   },
   {
     agentLabel: 'OpenCode',
     files: [
+      {
+        legacyManagedSourceSubdirs: ['opencode/plugins/codiff.js'],
+        managedMarker: '// codiff-managed-opencode-plugin:v1',
+        sourceSubdir: 'opencode/plugins/codiff-wrapper.js',
+        targetSubdir: '.config/opencode/plugins/codiff.js',
+      },
       {
         legacyManagedMarkers: [
           '<!-- Managed by Codiff. Reinstall the OpenCode integration instead of editing this file. -->',
@@ -50,11 +94,12 @@ const AGENT_SKILLS = Object.freeze([
       },
     ],
     id: 'opencode',
-    label: 'OpenCode Skill',
+    label: 'OpenCode Integration',
     targets: [
       {
         sourceSubdir: 'opencode/skills/codiff',
         targetSubdir: '.config/opencode/skills/codiff',
+        type: 'directory',
       },
     ],
   },

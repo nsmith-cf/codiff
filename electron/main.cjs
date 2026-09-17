@@ -1,5 +1,6 @@
 // @ts-check
 
+const { spawn } = require('node:child_process');
 const { existsSync, readFileSync, writeFileSync } = require('node:fs');
 const { basename, dirname, join, relative, resolve } = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -30,7 +31,11 @@ const {
 const { attachExternalLinkHandling } = require('./external-links.cjs');
 const { normalizeOpenAIModel } = require('./codex.cjs');
 const { normalizeClaudeModel } = require('./claude.cjs');
-const { normalizeOpenCodeModel, renderOpenCodeCommand } = require('./opencode.cjs');
+const {
+  normalizeOpenCodeModel,
+  renderOpenCodeCommand,
+  renderOpenCodePlugin,
+} = require('./opencode.cjs');
 const { createWalkthroughCommit } = require('./walkthrough-commit.cjs');
 const { readKeyboardLayout, watchKeyboardLayout } = require('./keyboard-layout.cjs');
 const { diagnoseWalkthroughMismatch } = require('./walkthrough-diagnosis.cjs');
@@ -115,6 +120,13 @@ const {
 const { getPlanReviewPath, readPlanReview, writePlanReview } = require('./plan-review.cjs');
 const { createSharedPlanSnapshot } = require('./shared-plan.cjs');
 const { createWalkthroughProgressReporter } = require('./walkthrough-progress.cjs');
+const {
+  createAgentFeedbackAdapterRegistry,
+  createAgentFeedbackAdapters,
+} = require('./agent-feedback-adapters.cjs');
+const { createAgentFeedbackDeliveryController } = require('./agent-feedback-delivery.cjs');
+const { createRepositoryStateRequestCoordinator } = require('./repository-state-requests.cjs');
+const { registerWindowOpenReceipt } = require('./window-open-receipt.cjs');
 
 /**
  * @typedef {import('../core/config/types.ts').CodiffConfig} CodiffConfig
@@ -137,6 +149,8 @@ const windowRepositories = new Map();
 const windowLaunchOptions = new Map();
 /** @type {Map<number, Promise<RepositoryState>>} */
 const windowInitialRepositoryStates = new Map();
+/** @type {Map<number, Promise<{available: boolean; reason?: string}>>} */
+const windowAgentFeedbackPreflights = new Map();
 /** @type {Map<number, number>} */
 const walkthroughProgressGenerations = new Map();
 /** @type {Map<number, string>} */
@@ -150,6 +164,17 @@ const completedPlanWindows = new Set();
 /** @type {Set<import('electron').BrowserWindow>} */
 const openWindows = new Set();
 const pendingCommentsClipboardController = createPendingCommentsClipboardController({ clipboard });
+const agentFeedbackAdapters = createAgentFeedbackAdapterRegistry();
+for (const [backend, adapter] of Object.entries(
+  createAgentFeedbackAdapters({ spawnProcess: spawn }),
+)) {
+  agentFeedbackAdapters.register(backend, adapter);
+}
+const agentFeedbackDelivery = createAgentFeedbackDeliveryController({
+  deliver: (request) => agentFeedbackAdapters.deliver(request),
+  probe: (identity) => agentFeedbackAdapters.probe(identity),
+});
+const repositoryStateRequestCoordinator = createRepositoryStateRequestCoordinator();
 /** @type {CodiffConfig} */
 let config = createDefaultConfig();
 
@@ -164,7 +189,10 @@ const skillInstallers = new Map(
       dialog,
       renderManagedFile:
         skill.id === 'opencode'
-          ? (_file, template) => renderOpenCodeCommand(template, config.settings.opencodeModel)
+          ? (file, template, sourcePath) =>
+              file.sourceSubdir === 'opencode/plugins/codiff-wrapper.js'
+                ? renderOpenCodePlugin(template, join(dirname(sourcePath), 'codiff.js'))
+                : renderOpenCodeCommand(template, config.settings.opencodeModel)
           : undefined,
       root,
       skill,
@@ -208,6 +236,21 @@ const resolveWindowAgent = (webContentsId) => {
   );
 };
 
+/**
+ * @param {number} webContentsId
+ * @param {import('../core/types.ts').AgentBackend} backend
+ */
+const getWindowAgentActiveStatus = async (webContentsId, backend) => {
+  const agent = getAgent(backend);
+  const launchOptions = windowLaunchOptions.get(webContentsId);
+  const sessionId = launchOptions?.[agent.sessionLaunchOptionKey];
+  if (!sessionId) {
+    return false;
+  }
+  const result = await agentFeedbackAdapters.probe({ backend, sessionId });
+  return result.available;
+};
+
 /** @param {'codex' | 'claude' | 'opencode' | 'pi'} agentId */
 const skillInstallerFor = (agentId) => skillInstallers.get(agentId);
 const { getTerminalHelperStatus, installTerminalHelper } = createTerminalHelper({
@@ -241,6 +284,10 @@ const getMarkdownDocumentContext = (webContentsId) => ({
 /** @param {number} webContentsId @param {RepositoryState} state */
 const storeResolvedRepositoryState = (webContentsId, state) => {
   windowRepositories.set(webContentsId, state.root);
+  agentFeedbackDelivery.setRepository(webContentsId, {
+    root: state.root,
+    source: state.source,
+  });
   const browserWindow = BrowserWindow.getAllWindows().find(
     (window) => window.webContents.id === webContentsId,
   );
@@ -254,7 +301,7 @@ const storeResolvedRepositoryState = (webContentsId, state) => {
       source: state.source,
     });
   }
-  const identity = getWindowIdentityForRepositoryState(state);
+  const identity = getWindowIdentityForRepositoryState(state, launchOptions);
   if (identity) {
     windowIdentities.set(webContentsId, identity);
   }
@@ -928,15 +975,26 @@ const createWindow = (
   const initialRepositoryStatePromise = launchOptions.planFile
     ? null
     : readInitialRepositoryStateWithConfig(repositoryPath, launchOptions);
-  const initialRepositoryState = initialRepositoryStatePromise?.then((state) => {
-    if (!window.isDestroyed()) {
-      storeResolvedRepositoryState(webContentsId, state);
-    }
-    return state;
-  });
+  const initialRepositoryState = initialRepositoryStatePromise;
   initialRepositoryState?.catch(() => {});
   if (initialRepositoryState) {
     windowInitialRepositoryStates.set(webContentsId, initialRepositoryState);
+  }
+  if (launchOptions.agentReview && initialRepositoryState) {
+    agentFeedbackDelivery.register(webContentsId, {
+      ...launchOptions.agentReview,
+      backend: /** @type {import('../core/types.ts').AgentBackend} */ (launchOptions.agentBackend),
+      repository: initialRepositoryState.then(({ root, source }) => ({ root, source })),
+    });
+  }
+  const deliveryPreflight = launchOptions.agentReview
+    ? agentFeedbackDelivery.prepare(webContentsId).catch((error) => ({
+        available: false,
+        reason: error instanceof Error ? error.message : String(error),
+      }))
+    : null;
+  if (deliveryPreflight) {
+    windowAgentFeedbackPreflights.set(webContentsId, deliveryPreflight);
   }
   if (
     !launchOptions.planFile &&
@@ -967,7 +1025,7 @@ const createWindow = (
   window.on('minimize', () => repositoryWatcherCoordinator.visibilityChanged(webContentsId));
   window.on('restore', () => repositoryWatcherCoordinator.focus(webContentsId));
   window.on('show', () => repositoryWatcherCoordinator.focus(webContentsId));
-  window.once('ready-to-show', () => window.show());
+  registerWindowOpenReceipt(window, launchOptions, deliveryPreflight);
   let allowClose = false;
   let copyingPendingCommentsBeforeClose = false;
   window.on('close', (event) => {
@@ -1018,13 +1076,16 @@ const createWindow = (
   window.on('closed', () => {
     openWindows.delete(window);
     definitionSearchCoordinator.cancel(webContentsId);
+    repositoryStateRequestCoordinator.clear(webContentsId);
     repositoryWatcherCoordinator.detach(webContentsId);
     clearMarkdownDocumentWatchers(webContentsId);
+    agentFeedbackDelivery.clear(webContentsId);
     completedPlanWindows.delete(webContentsId);
     planInitialVersions.delete(webContentsId);
     readyPlanWindows.delete(webContentsId);
     windowIdentities.delete(webContentsId);
     windowInitialRepositoryStates.delete(webContentsId);
+    windowAgentFeedbackPreflights.delete(webContentsId);
     walkthroughProgressGenerations.delete(webContentsId);
     windowRepositories.delete(webContentsId);
     windowLaunchOptions.delete(webContentsId);
@@ -1432,19 +1493,38 @@ ipcMain.handle('codiff:openReleasePage', () => {
 });
 
 ipcMain.handle('codiff:getRepositoryState', async (event, source) => {
-  const repositoryPath = windowRepositories.get(event.sender.id) || getLaunchPath();
-  const launchOptions = windowLaunchOptions.get(event.sender.id);
-  const initialState = !source ? windowInitialRepositoryStates.get(event.sender.id) : undefined;
+  const webContentsId = event.sender.id;
+  const repositoryPath = windowRepositories.get(webContentsId) || getLaunchPath();
+  const launchOptions = windowLaunchOptions.get(webContentsId);
+  const initialState = !source ? windowInitialRepositoryStates.get(webContentsId) : undefined;
   if (initialState) {
-    windowInitialRepositoryStates.delete(event.sender.id);
+    windowInitialRepositoryStates.delete(webContentsId);
   }
-  const state = initialState
-    ? await initialState
-    : await readRepositoryStateWithConfig(repositoryPath, source || launchOptions?.source);
-  storeResolvedRepositoryState(event.sender.id, state);
-  rememberLastRepositoryPath(state.root);
-  void resetRepositoryWatcher(event.sender.id, state.root);
-  return state;
+  return repositoryStateRequestCoordinator.resolve(
+    webContentsId,
+    () =>
+      initialState ||
+      readRepositoryStateWithConfig(repositoryPath, source || launchOptions?.source),
+    (state) => {
+      storeResolvedRepositoryState(webContentsId, state);
+      rememberLastRepositoryPath(state.root);
+      void resetRepositoryWatcher(webContentsId, state.root);
+    },
+    () => {
+      if (event.sender.isDestroyed()) {
+        return false;
+      }
+      const window = BrowserWindow.fromWebContents(event.sender);
+      return window != null && !window.isDestroyed();
+    },
+  );
+});
+
+ipcMain.handle('codiff:sendAgentReviewFeedback', async (event, feedback) => {
+  const response = await agentFeedbackDelivery.deliver(event.sender.id, feedback);
+  if (response.status === 'rejected') throw new Error(response.reason);
+  BrowserWindow.fromWebContents(event.sender)?.close();
+  return response;
 });
 
 ipcMain.handle('codiff:resolvePullRequestUrl', (event, value) => {
@@ -1531,28 +1611,57 @@ ipcMain.handle('codiff:markPlanReady', async (event) => {
   writePlanResult(event.sender.id, 'open');
 });
 
-ipcMain.handle(
-  'codiff:getLaunchOptions',
-  (event) =>
-    windowLaunchOptions.get(event.sender.id) || {
-      repositoryPathProvided: false,
-      walkthrough: false,
+ipcMain.handle('codiff:getLaunchOptions', async (event) => {
+  const launchOptions = windowLaunchOptions.get(event.sender.id) || {
+    repositoryPathProvided: false,
+    walkthrough: false,
+  };
+  const preflight = windowAgentFeedbackPreflights.get(event.sender.id);
+  if (!launchOptions.agentReview || !preflight) {
+    return launchOptions;
+  }
+  return {
+    ...launchOptions,
+    agentReviewDelivery: {
+      ...(await preflight),
+      deliveryId: launchOptions.agentReview.deliveryId,
     },
-);
+  };
+});
 
-ipcMain.handle('codiff:getAgentSkillStatus', (event) => {
-  const installer = skillInstallerFor(resolveWindowAgent(event.sender.id).id);
-  return installer ? installer.getStatus() : { installed: false, path: '' };
+ipcMain.handle('codiff:refreshAgentReviewDelivery', async (event) => {
+  const launchOptions = windowLaunchOptions.get(event.sender.id);
+  if (!launchOptions?.agentReview) {
+    return { available: false, deliveryId: '', reason: 'No agent review delivery is registered.' };
+  }
+  const capability = await agentFeedbackDelivery.prepare(event.sender.id).catch((error) => ({
+    available: false,
+    reason: error instanceof Error ? error.message : String(error),
+  }));
+  return { ...capability, deliveryId: launchOptions.agentReview.deliveryId };
+});
+
+ipcMain.handle('codiff:getAgentSkillStatus', async (event) => {
+  const agent = resolveWindowAgent(event.sender.id);
+  const installer = skillInstallerFor(agent.id);
+  const status = installer
+    ? installer.getStatus((backend) => getWindowAgentActiveStatus(event.sender.id, backend))
+    : { active: false, installed: false, path: '' };
+  return { ...(await status), backend: agent.id };
 });
 
 ipcMain.handle('codiff:installAgentSkill', async (event) => {
-  const installer = skillInstallerFor(resolveWindowAgent(event.sender.id).id);
+  const agent = resolveWindowAgent(event.sender.id);
+  const installer = skillInstallerFor(agent.id);
   if (!installer) {
-    return { installed: false, path: '' };
+    return { active: false, backend: agent.id, installed: false, path: '' };
   }
 
   await installer.install(BrowserWindow.fromWebContents(event.sender));
-  return installer.getStatus();
+  const status = await installer.getStatus((backend) =>
+    getWindowAgentActiveStatus(event.sender.id, backend),
+  );
+  return { ...status, backend: agent.id };
 });
 
 ipcMain.handle('codiff:getTerminalHelperStatus', () => getTerminalHelperStatus());

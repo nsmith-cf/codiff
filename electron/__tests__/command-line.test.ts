@@ -18,6 +18,8 @@ const { getCommandLineLaunchOptions, getCommandLineRepositoryPath, getInitialRep
       commandLine: ReadonlyArray<string>,
       fallbackPath?: string,
     ) => {
+      agentReview?: { deliveryId: string; sessionId: string };
+      agentReviewOpenFile?: string;
       applyUpdate?: boolean;
       codexSessionId?: string;
       planFile?: string;
@@ -75,6 +77,15 @@ const defaultLaunchOptions = {
 test('parses the apply-update launch flag', () => {
   expect(getCommandLineLaunchOptions(['codiff', '--apply-update']).applyUpdate).toBe(true);
   expect(getCommandLineLaunchOptions(['codiff', '/repo']).applyUpdate).toBeUndefined();
+});
+
+test('rejects partial agent review delivery pairs', () => {
+  expect(() =>
+    getCommandLineLaunchOptions(['codiff', '--agent-review-delivery', 'delivery-1']),
+  ).toThrow('must be used together');
+  expect(() =>
+    getCommandLineLaunchOptions(['codiff', '--agent-review-open-file', '/tmp/open.json']),
+  ).toThrow('must be used together');
 });
 
 test('parses the OpenCode agent override', () => {
@@ -154,6 +165,82 @@ test('parses plan handoff command-line options', () => {
     },
     repositoryPath: '/repo',
   });
+});
+
+test('parses agent review handoff command-line options', () => {
+  expect(
+    readCommandLine([
+      'codiff',
+      '--agent',
+      'codex',
+      '--codex-session',
+      'session-1',
+      '--agent-review-delivery',
+      'delivery-1',
+      '--agent-review-open-file',
+      '/tmp/open.json',
+      '/repo',
+    ]),
+  ).toMatchObject({
+    launchOptions: {
+      agentReview: { deliveryId: 'delivery-1', sessionId: 'session-1' },
+      agentReviewOpenFile: '/tmp/open.json',
+      repositoryPathProvided: true,
+      walkthrough: false,
+    },
+    repositoryPath: '/repo',
+  });
+});
+
+test.each([
+  [
+    'without a backend',
+    [
+      'codiff',
+      '--codex-session',
+      'session-1',
+      '--agent-review-delivery',
+      'delivery-1',
+      '--agent-review-open-file',
+      '/tmp/open.json',
+    ],
+  ],
+  [
+    'without the selected backend session',
+    [
+      'codiff',
+      '--agent',
+      'codex',
+      '--claude-session',
+      'session-1',
+      '--agent-review-delivery',
+      'delivery-1',
+      '--agent-review-open-file',
+      '/tmp/open.json',
+    ],
+  ],
+])('rejects an agent review delivery pair %s', (_label, args) => {
+  expect(() => getCommandLineLaunchOptions(args)).toThrow('matching agent backend and session');
+});
+
+test('rejects simultaneous plan and agent review handoffs', () => {
+  expect(() =>
+    getCommandLineLaunchOptions([
+      'codiff',
+      '--agent',
+      'codex',
+      '--codex-session',
+      'session-1',
+      '--agent-review-delivery',
+      'delivery-1',
+      '--agent-review-open-file',
+      '/tmp/open.json',
+      '--plan-file',
+      '/tmp/plan.md',
+      '--plan-result-file',
+      '/tmp/result.json',
+    ]),
+  ).toThrow('cannot be used together');
 });
 
 test('parses positional HEAD revisions as commit sources', () => {

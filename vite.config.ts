@@ -106,8 +106,12 @@ export default defineConfig({
   },
   test: {
     include: [
+      'bin/**/*.test.ts',
+      'claude/**/*.test.ts',
       'core/**/*.test.{ts,tsx}',
       'electron/**/*.test.ts',
+      'opencode/**/*.test.ts',
+      'pi/**/*.test.ts',
       'service/**/*.test.ts',
       'web/**/*.test.{ts,tsx}',
     ],

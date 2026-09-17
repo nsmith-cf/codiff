@@ -100,6 +100,16 @@ approval document.
    node scripts/open-codiff.mjs --file /tmp/codiff-walkthrough-<id>.json /path/to/repository
    ```
 
+   Run the desktop launcher normally. It returns after printing `Codiff opened. Review feedback will
+arrive as a separate message in this session.` Stop waiting once it prints the open confirmation;
+   do not wait for Codiff to close or parse terminal output for review comments. A normal close sends
+   no feedback and requires no feedback-driven edits.
+
+   When Codiff later sends review feedback, treat it as a new user request in this same session. Address every comment in order. Do not automatically reopen Codiff after handling the feedback.
+   Use each comment's file, line or range anchor, and diff context. If feedback is materially
+   ambiguous, ask one focused question instead of guessing. Summarize the feedback you handled and
+   decide whether another review would be useful.
+
    Share mode:
 
    ```bash
@@ -125,7 +135,9 @@ approval document.
    `--open`, which only controls whether the completed walkthrough is opened.
 
    **Agent integration:** The launcher passes `CODEX_THREAD_ID` to Codiff in desktop mode and
-   identifies shared walkthroughs as authored by Codex.
+   identifies shared walkthroughs as authored by Codex. Codiff closes after the Codex queue command
+   accepts the feedback; this does not confirm that Codex processed it. The reviewed repository may
+   differ from the agent session directory; the exact launching session remains the feedback recipient.
 
    Codiff validates and repairs the document against the live diff, so anchors that drift
    are pinned to a real section rather than dropped.

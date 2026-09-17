@@ -1,0 +1,2 @@
+Codiff local walkthrough demo
+This isolated file exists only to preview the current change.

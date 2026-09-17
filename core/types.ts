@@ -148,8 +148,12 @@ export type ReviewSource =
   | {
       /** Base ref (left side). For symmetric ranges the diff starts at its merge-base with head. */
       base: string;
+      /** Immutable resolved base commit for this snapshot. */
+      baseSha?: string;
       /** Head ref (right side). */
       head: string;
+      /** Immutable resolved head commit for this snapshot. */
+      headSha?: string;
       /** `true` for `base...head` (merge-base), `false` for `base..head` (direct). */
       symmetric: boolean;
       type: 'range';
@@ -423,8 +427,71 @@ export type WalkthroughContext = {
   version: 1;
 };
 
+export type AgentReviewFeedbackComment = {
+  anchor: 'file' | 'line';
+  body: string;
+  context: string;
+  filePath: string;
+  lineNumber?: number;
+  order: number;
+  sectionId: string;
+  side?: 'additions' | 'deletions';
+  startLineNumber?: number;
+  startSide?: 'additions' | 'deletions';
+};
+
+export type AgentReviewFeedbackContent = {
+  comments: ReadonlyArray<AgentReviewFeedbackComment>;
+  markdown: string;
+};
+
+export type AgentReviewFeedback = AgentReviewFeedbackContent & {
+  repository: { root: string; source: ReviewSource };
+  version: 1;
+};
+
+export type AgentBackend = 'codex' | 'claude' | 'opencode' | 'pi';
+
+export type AgentFeedbackSessionIdentity = {
+  backend: AgentBackend;
+  sessionId: string;
+};
+
+export type AgentFeedbackAssurance =
+  | 'bridge-queue'
+  | 'dispatch-started'
+  | 'message-created'
+  | 'queue-command'
+  | 'transport-write';
+
+export type AgentFeedbackDeliveryRequest = {
+  backend: AgentBackend;
+  deliveryId: string;
+  feedback: AgentReviewFeedback;
+  repositoryRoot: string;
+  sessionId: string;
+  version: 1;
+};
+
+export type AgentFeedbackDeliveryResponse =
+  | {
+      assurance: AgentFeedbackAssurance;
+      deliveryId: string;
+      status: 'accepted' | 'queued' | 'already-accepted';
+    }
+  | { deliveryId: string; reason: string; status: 'rejected' };
+
+export type AgentFeedbackDeliveryCapability = {
+  available: boolean;
+  deliveryId: string;
+  reason?: string;
+};
+
 export type CodiffLaunchOptions = {
-  agentBackend?: 'codex' | 'claude' | 'opencode' | 'pi';
+  agentBackend?: AgentBackend;
+  agentReview?: { deliveryId: string; sessionId: string };
+  agentReviewDelivery?: AgentFeedbackDeliveryCapability;
+  agentReviewOpenFile?: string;
   applyUpdate?: boolean;
   claudeSessionId?: string;
   codexSessionId?: string;
@@ -443,8 +510,14 @@ export type CodiffLaunchOptions = {
 };
 
 export type AgentSkillStatus = {
+  active: boolean;
+  detail?: string;
   installed: boolean;
   path: string;
+};
+
+export type AgentSkillStatusResponse = AgentSkillStatus & {
+  backend: AgentBackend;
 };
 
 /** @deprecated Use {@link AgentSkillStatus}. */

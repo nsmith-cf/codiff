@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import {
+  access,
   appendFile,
   chmod,
   mkdir,
@@ -10,7 +11,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, expect, test } from 'vite-plus/test';
 import {
@@ -31,6 +32,76 @@ import {
 } from './helpers/resources.ts';
 
 const execFileAsync = promisify(execFile);
+
+const expectAgentReviewDocumentation = (document: string) => {
+  const normalized = document.replaceAll(/\s+/g, ' ');
+  expect(normalized).toContain('only for agent-launched desktop handoffs');
+  expect(normalized).toContain('focused comment draft without requiring blur');
+  expect(normalized).toContain('window, comments, and draft stay intact');
+  expect(normalized).toContain('disabled when there is no feedback');
+  expect(normalized).toContain('Successful submission closes Codiff');
+  expect(normalized).toContain('separate user message');
+  expect(normalized).toContain(
+    'When Codiff later sends review feedback, treat it as a new user request in this same session. Address every comment in order. Do not automatically reopen Codiff after handling the feedback.',
+  );
+  expect(normalized).toContain('OpenCode');
+  expect(normalized).toContain('in-memory FIFO');
+  expect(document).not.toContain('status: "submitted"');
+  expect(document).not.toContain('status: "closed"');
+};
+
+const createAgentReviewCommandLogger = async () => {
+  const logger = await createFakeCommandLogger('codiff-agent-review-launcher-', 'codiff');
+  const openPathLog = join(logger.directory, 'open-path.txt');
+  await writeFile(
+    logger.commandPath,
+    `#!/bin/sh
+delivery_id=""
+open_file=""
+previous=""
+for arg in "$@"; do
+  printf "%s\\n" "$arg" >> "$OPEN_ARGS_FILE"
+  if [ "$previous" = "--agent-review-delivery" ]; then
+    delivery_id="$arg"
+  fi
+  if [ "$previous" = "--agent-review-open-file" ]; then
+    open_file="$arg"
+  fi
+  previous="$arg"
+done
+printf '%s' "$open_file" > "$CODIFF_TEST_OPEN_PATH_LOG"
+if [ -n "${'${CODIFF_TEST_CHILD_STDOUT:-}'}" ]; then
+  printf '%s\\n' "$CODIFF_TEST_CHILD_STDOUT"
+fi
+if [ -n "${'${CODIFF_TEST_SIGNAL:-}'}" ]; then
+  kill -s "$CODIFF_TEST_SIGNAL" $$
+fi
+if [ -n "${'${CODIFF_TEST_EXIT_CODE:-}'}" ]; then
+  exit "$CODIFF_TEST_EXIT_CODE"
+fi
+printf '{"deliveryAvailable":true,"deliveryId":"%s","status":"open","version":1}\\n' "$delivery_id" > "$open_file"
+`,
+  );
+
+  const readRawArgs = logger.readArgs;
+
+  return Object.assign(logger, {
+    env: {
+      ...logger.env,
+      CODIFF_TEST_OPEN_PATH_LOG: openPathLog,
+    },
+    readArgs: async () => {
+      const args = await readRawArgs();
+      return args.filter(
+        (arg, index) =>
+          !['--agent-review-delivery', '--agent-review-open-file'].includes(arg) &&
+          !['--agent-review-delivery', '--agent-review-open-file'].includes(args[index - 1] ?? ''),
+      );
+    },
+    readOpenPath: () => readFile(openPathLog, 'utf8'),
+    readRawArgs,
+  });
+};
 
 const git = async (repo: string, args: ReadonlyArray<string>) => {
   await execFileAsync('git', ['-C', repo, ...args], {
@@ -67,6 +138,79 @@ const withCwd = async <T>(cwd: string, callback: () => T | Promise<T>) => {
   using _workingDirectory = createTemporaryWorkingDirectory(cwd);
   return await callback();
 };
+
+test('source CLI rejects partial agent review delivery pairs', () => {
+  expect(() => parseArguments(['--agent-review-delivery', 'delivery-1'])).toThrow(
+    'must be used together',
+  );
+  expect(() => parseArguments(['--agent-review-open-file', '/tmp/open.json'])).toThrow(
+    'must be used together',
+  );
+});
+
+test('source CLI isolates agent review delivery identity from the matching session', () => {
+  expect(
+    parseArguments([
+      '--agent',
+      'codex',
+      '--codex-session',
+      'session-1',
+      '--agent-review-delivery',
+      'delivery-1',
+      '--agent-review-open-file',
+      '/tmp/open.json',
+    ]),
+  ).toMatchObject({
+    agentReview: { deliveryId: 'delivery-1', sessionId: 'session-1' },
+    agentReviewOpenFilePath: '/tmp/open.json',
+  });
+});
+
+test.each([
+  [
+    'without a backend',
+    [
+      '--codex-session',
+      'session-1',
+      '--agent-review-delivery',
+      'delivery-1',
+      '--agent-review-open-file',
+      '/tmp/open.json',
+    ],
+  ],
+  [
+    'without the selected backend session',
+    [
+      '--agent',
+      'codex',
+      '--claude-session',
+      'session-1',
+      '--agent-review-delivery',
+      'delivery-1',
+      '--agent-review-open-file',
+      '/tmp/open.json',
+    ],
+  ],
+])('source CLI rejects an agent review delivery pair %s', (_label, args) => {
+  expect(() => parseArguments(args)).toThrow('matching agent backend and session');
+});
+
+test('source CLI rejects simultaneous plan and agent review handoffs', () => {
+  expect(() =>
+    parseArguments([
+      '--agent',
+      'codex',
+      '--codex-session',
+      'session-1',
+      '--agent-review-delivery',
+      'delivery-1',
+      '--agent-review-open-file',
+      '/tmp/open.json',
+      '--plan',
+      '/tmp/plan.md',
+    ]),
+  ).toThrow('cannot be used together');
+});
 
 const withFakeGitHubCli = async <T>(
   response: Record<string, unknown>,
@@ -519,6 +663,72 @@ test('packaged terminal helper forwards --commit HEAD to Electron', async () => 
   ]);
 });
 
+test('packaged terminal helper forwards agent review delivery options to Electron', async () => {
+  await using logger = await createFakeOpenLogger();
+  const repositoryPath = join(logger.directory, 'repo');
+  const openFile = join(logger.directory, 'open.json');
+  const deliveryId = 'delivery-1';
+  const openPath = join(logger.directory, 'bin', 'open');
+
+  await mkdir(repositoryPath);
+  await writeFile(
+    openPath,
+    `#!/bin/sh
+for arg in "$@"; do
+  printf "%s\\n" "$arg" >> "$OPEN_ARGS_FILE"
+done
+previous=""
+for arg in "$@"; do
+  if [ "$previous" = "--agent-review-delivery" ]; then
+    delivery_id="$arg"
+  fi
+  if [ "$previous" = "--agent-review-open-file" ]; then
+    open_file="$arg"
+  fi
+  previous="$arg"
+done
+printf '{"deliveryAvailable":true,"deliveryId":"%s","status":"open","version":1}\\n' "$delivery_id" > "$open_file"
+`,
+  );
+  await chmod(openPath, 0o755);
+
+  await execFileAsync(
+    resolve('bin/codiff-app'),
+    [
+      '--agent',
+      'codex',
+      '--codex-session',
+      'session-1',
+      '--agent-review-delivery',
+      deliveryId,
+      '--agent-review-open-file',
+      openFile,
+      repositoryPath,
+    ],
+    {
+      env: {
+        ...logger.env,
+        CODIFF_NODE_COMMAND: process.execPath,
+      },
+    },
+  );
+
+  expect(await logger.readArgs()).toEqual([
+    '-n',
+    resolve('bin/../../../..'),
+    '--args',
+    '--codex-session',
+    'session-1',
+    '--agent',
+    'codex',
+    '--agent-review-delivery',
+    deliveryId,
+    '--agent-review-open-file',
+    openFile,
+    repositoryPath,
+  ]);
+});
+
 test('packaged terminal helper resolves GitHub PR branches to canonical URLs', async () => {
   await using logger = await createFakeOpenLogger();
   const ghArgsPath = join(logger.directory, 'gh-args.txt');
@@ -821,6 +1031,76 @@ test('packaged terminal helper forwards a plan handoff and result file', async (
   expect(stdout).toBe('CODIFF_PLAN_RESULT {"status":"done"}\n');
 });
 
+test('packaged terminal helper rejects partial agent review delivery pairs before opening', async () => {
+  await using logger = await createFakeOpenLogger();
+  const repositoryPath = join(logger.directory, 'repo');
+  await mkdir(repositoryPath);
+
+  await expect(
+    execFileAsync(
+      resolve('bin/codiff-app'),
+      ['--agent-review-delivery', 'delivery-1', repositoryPath],
+      { env: logger.env },
+    ),
+  ).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('must be used together') });
+  await expect(logger.readArgs()).rejects.toThrow();
+});
+
+test('packaged terminal helper rejects agent review delivery without matching identity', async () => {
+  await using logger = await createFakeOpenLogger();
+  const repositoryPath = join(logger.directory, 'repo');
+  await mkdir(repositoryPath);
+
+  await expect(
+    execFileAsync(
+      resolve('bin/codiff-app'),
+      [
+        '--codex-session',
+        'session-1',
+        '--agent-review-delivery',
+        'delivery-1',
+        '--agent-review-open-file',
+        join(logger.directory, 'open.json'),
+        repositoryPath,
+      ],
+      { env: logger.env },
+    ),
+  ).rejects.toMatchObject({
+    code: 1,
+    stderr: expect.stringContaining('matching agent backend and session'),
+  });
+  await expect(logger.readArgs()).rejects.toThrow();
+});
+
+test('packaged terminal helper rejects simultaneous plan and agent review handoffs', async () => {
+  await using logger = await createFakeOpenLogger();
+  const repositoryPath = join(logger.directory, 'repo');
+  const planFile = join(logger.directory, 'plan.md');
+  await mkdir(repositoryPath);
+  await writeFile(planFile, '# Plan\n');
+
+  await expect(
+    execFileAsync(
+      resolve('bin/codiff-app'),
+      [
+        '--agent',
+        'codex',
+        '--codex-session',
+        'session-1',
+        '--agent-review-delivery',
+        'delivery-1',
+        '--agent-review-open-file',
+        join(logger.directory, 'open.json'),
+        '--plan-file',
+        planFile,
+        repositoryPath,
+      ],
+      { env: logger.env },
+    ),
+  ).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('cannot be used together') });
+  await expect(logger.readArgs()).rejects.toThrow();
+});
+
 test('packaged terminal helper waits for an open plan to finish', async () => {
   await using logger = await createFakeOpenLogger();
   const repositoryPath = join(logger.directory, 'repo');
@@ -873,8 +1153,156 @@ printf '{"pid":%s,"status":"open"}\\n' "$app_pid" > "$result_file"
   expect(stdout).toBe('CODIFF_PLAN_RESULT {"documentChanged":true,"status":"closed"}\n');
 });
 
+const agentLaunchers = [
+  {
+    agent: 'codex',
+    environment: (repositoryPath: string, sessionId: string) => ({
+      CODEX_SESSION_CWD: repositoryPath,
+      CODEX_THREAD_ID: sessionId,
+    }),
+    path: 'codex/skills/codiff/scripts/open-codiff.mjs',
+    sessionFlag: '--codex-session',
+    sessionId: '019e5e57-e7d6-7392-9ad1-ad959319d2fb',
+  },
+  {
+    agent: 'claude',
+    environment: (repositoryPath: string, sessionId: string) => ({
+      CLAUDE_SESSION_CWD: repositoryPath,
+      CLAUDE_SESSION_ID: sessionId,
+    }),
+    path: 'claude/skills/codiff/scripts/open-codiff.mjs',
+    sessionFlag: '--claude-session',
+    sessionId: '019e5e57-e7d6-7392-9ad1-ad959319d2fb',
+  },
+  {
+    agent: 'opencode',
+    environment: (_repositoryPath: string, sessionId: string) => ({
+      OPENCODE_SESSION_ID: sessionId,
+    }),
+    path: 'opencode/skills/codiff/scripts/open-codiff.mjs',
+    sessionFlag: '--opencode-session',
+    sessionId: 'ses_121b4816bffebMr9YE52O4870p',
+  },
+  {
+    agent: 'pi',
+    environment: (_repositoryPath: string, sessionId: string) => ({
+      PI_SESSION_ID: sessionId,
+    }),
+    path: 'pi/skills/codiff/scripts/open-codiff.mjs',
+    sessionFlag: '--pi-session',
+    sessionId: '019e5e57-e7d6-7392-9ad1-ad959319d2fb',
+  },
+] as const;
+
+test.each(agentLaunchers)(
+  '$agent skill launcher canonicalizes a nested repository and isolates child stdout',
+  async ({ agent, environment, path, sessionFlag, sessionId }) => {
+    await using logger = await createAgentReviewCommandLogger();
+    const repositoryPath = join(logger.directory, 'repo');
+    const nestedRepositoryPath = join(repositoryPath, 'nested');
+    const walkthroughFile = join(logger.directory, 'walkthrough.json');
+    await mkdir(nestedRepositoryPath, { recursive: true });
+    await git(repositoryPath, ['init']);
+    await writeFile(walkthroughFile, '{}');
+    const expectedNestedRepositoryPath = await realpath(nestedRepositoryPath);
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [resolve(path), '--file', walkthroughFile, expectedNestedRepositoryPath],
+      {
+        cwd: expectedNestedRepositoryPath,
+        env: {
+          ...logger.env,
+          ...environment(expectedNestedRepositoryPath, sessionId),
+          CODIFF_COMMAND: logger.commandPath,
+          CODIFF_TEST_CHILD_STDOUT: 'child protocol noise',
+        },
+      },
+    );
+
+    const args = await logger.readRawArgs();
+    const deliveryFlagIndex = args.indexOf('--agent-review-delivery');
+    const openFlagIndex = args.indexOf('--agent-review-open-file');
+    expect(args).toEqual(
+      expect.arrayContaining([
+        '-w',
+        '--agent',
+        agent,
+        '--walkthrough-file',
+        walkthroughFile,
+        sessionFlag,
+        sessionId,
+        expectedNestedRepositoryPath,
+      ]),
+    );
+    expect(deliveryFlagIndex).toBeGreaterThan(-1);
+    expect(args[deliveryFlagIndex + 1]).toBeTruthy();
+    expect(openFlagIndex).toBeGreaterThan(-1);
+    expect(args[openFlagIndex + 1]).toBeTruthy();
+    expect(stdout).toBe(
+      'Codiff opened. Review feedback will arrive as a separate message in this session.\n',
+    );
+    await expect(access(dirname(await logger.readOpenPath()))).rejects.toThrow();
+  },
+);
+
+test.each(agentLaunchers)(
+  '$agent skill launcher reports a silent nonzero exit and cleans up',
+  async ({ environment, path, sessionId }) => {
+    await using logger = await createAgentReviewCommandLogger();
+    const repositoryPath = join(logger.directory, 'repo');
+    const walkthroughFile = join(logger.directory, 'walkthrough.json');
+    await mkdir(repositoryPath);
+    await writeFile(walkthroughFile, '{}');
+
+    await expect(
+      execFileAsync(process.execPath, [resolve(path), '--file', walkthroughFile], {
+        cwd: repositoryPath,
+        env: {
+          ...logger.env,
+          ...environment(repositoryPath, sessionId),
+          CODIFF_COMMAND: logger.commandPath,
+          CODIFF_TEST_EXIT_CODE: '7',
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 7,
+      stderr: expect.stringContaining('Codiff exited with code 7'),
+      stdout: '',
+    });
+    await expect(access(dirname(await logger.readOpenPath()))).rejects.toThrow();
+  },
+);
+
+test.each(agentLaunchers)(
+  '$agent skill launcher reports signal termination and cleans up',
+  async ({ environment, path, sessionId }) => {
+    await using logger = await createAgentReviewCommandLogger();
+    const repositoryPath = join(logger.directory, 'repo');
+    const walkthroughFile = join(logger.directory, 'walkthrough.json');
+    await mkdir(repositoryPath);
+    await writeFile(walkthroughFile, '{}');
+
+    await expect(
+      execFileAsync(process.execPath, [resolve(path), '--file', walkthroughFile], {
+        cwd: repositoryPath,
+        env: {
+          ...logger.env,
+          ...environment(repositoryPath, sessionId),
+          CODIFF_COMMAND: logger.commandPath,
+          CODIFF_TEST_SIGNAL: 'TERM',
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining('Codiff terminated by signal SIGTERM'),
+      stdout: '',
+    });
+    await expect(access(dirname(await logger.readOpenPath()))).rejects.toThrow();
+  },
+);
+
 test('Codex skill launcher uses the session cwd as the repository target', async () => {
-  await using logger = await createFakeCommandLogger('codiff-skill-launcher-', 'codiff');
+  await using logger = await createAgentReviewCommandLogger();
   const home = join(logger.directory, 'home');
   const repositoryPath = join(logger.directory, 'repo');
   const sessionDirectory = join(home, '.codex', 'sessions', '2026', '05', '25');
@@ -1054,7 +1482,7 @@ test('Codex skill launcher delegates plan shares without opening Electron', asyn
 });
 
 test('Codex skill launcher falls back to the source repo when run from the skill directory', async () => {
-  await using logger = await createFakeCommandLogger('codiff-skill-launcher-', 'codiff');
+  await using logger = await createAgentReviewCommandLogger();
   const walkthroughFile = join(logger.directory, 'walkthrough.json');
 
   await writeFile(walkthroughFile, '{}');
@@ -1084,7 +1512,7 @@ test('Codex skill launcher falls back to the source repo when run from the skill
 });
 
 test('Codex skill launcher does not override explicit repository targets', async () => {
-  await using logger = await createFakeCommandLogger('codiff-skill-launcher-', 'codiff');
+  await using logger = await createAgentReviewCommandLogger();
   const sessionRepositoryPath = join(logger.directory, 'session-repo');
   const explicitRepositoryPath = join(logger.directory, 'explicit-repo');
   const walkthroughFile = join(logger.directory, 'walkthrough.json');
@@ -1162,7 +1590,7 @@ test('Codex skill launcher delegates share requests without opening Electron', a
 });
 
 test('Claude skill launcher uses the session cwd and forwards --agent claude', async () => {
-  await using logger = await createFakeCommandLogger('codiff-claude-launcher-', 'codiff');
+  await using logger = await createAgentReviewCommandLogger();
   const home = join(logger.directory, 'home');
   const repositoryPath = join(logger.directory, 'repo');
   const sessionId = '019e5e57-e7d6-7392-9ad1-ad959319d2fb';
@@ -1204,8 +1632,8 @@ test('Claude skill launcher uses the session cwd and forwards --agent claude', a
   ]);
 });
 
-test('Pi skill launcher resolves the current session and forwards --agent pi', async () => {
-  await using logger = await createFakeCommandLogger('codiff-pi-launcher-', 'codiff');
+test('Pi skill launcher rejects review delivery without an exact session id', async () => {
+  await using logger = await createAgentReviewCommandLogger();
   const home = join(logger.directory, 'home');
   const repositoryPath = join(logger.directory, 'repo');
   const sessionId = '019e5e57-e7d6-7392-9ad1-ad959319d2fb';
@@ -1223,34 +1651,27 @@ test('Pi skill launcher resolves the current session and forwards --agent pi', a
   );
   await truncate(sessionPath, 17 * 1024 * 1024);
 
-  await execFileAsync(
-    process.execPath,
-    [resolve('pi/skills/codiff/scripts/open-codiff.mjs'), '--file', walkthroughFile, 'HEAD'],
-    {
-      cwd: repositoryPath,
-      env: {
-        ...logger.env,
-        CODIFF_COMMAND: logger.commandPath,
-        PI_HOME: join(home, '.pi'),
+  await expect(
+    execFileAsync(
+      process.execPath,
+      [resolve('pi/skills/codiff/scripts/open-codiff.mjs'), '--file', walkthroughFile, 'HEAD'],
+      {
+        cwd: repositoryPath,
+        env: {
+          ...logger.env,
+          CODIFF_COMMAND: logger.commandPath,
+          PI_HOME: join(home, '.pi'),
+        },
       },
-    },
-  );
-
-  expect(await logger.readArgs()).toEqual([
-    '-w',
-    '--agent',
-    'pi',
-    '--walkthrough-file',
-    walkthroughFile,
-    '--pi-session',
-    sessionId,
-    'HEAD',
-    realRepositoryPath,
-  ]);
+    ),
+  ).rejects.toMatchObject({
+    stderr: expect.stringContaining('exact Pi session identity is unavailable'),
+    stdout: '',
+  });
 });
 
-test('OpenCode skill launcher links the project session from a repository subdirectory', async () => {
-  await using logger = await createFakeCommandLogger('codiff-opencode-launcher-', 'codiff');
+test('OpenCode skill launcher rejects review delivery without an exact session id', async () => {
+  await using logger = await createAgentReviewCommandLogger();
   const repositoryPath = join(logger.directory, 'repo');
   const workingDirectory = join(repositoryPath, 'nested');
   const walkthroughFile = join(logger.directory, 'walkthrough.json');
@@ -1261,7 +1682,6 @@ test('OpenCode skill launcher links the project session from a repository subdir
   await mkdir(workingDirectory, { recursive: true });
   await mkdir(join(homePath, '.opencode', 'bin'), { recursive: true });
   const realRepositoryPath = await realpath(repositoryPath);
-  const realWorkingDirectory = await realpath(workingDirectory);
   await writeFile(walkthroughFile, '{}');
   await writeFile(
     openCodePath,
@@ -1271,32 +1691,31 @@ printf '[{"id":"${sessionId}","directory":"%s"}]\\n' "$OPENCODE_SESSION_DIRECTOR
   );
   await chmod(openCodePath, 0o755);
 
-  await execFileAsync(
-    process.execPath,
-    [resolve('opencode/skills/codiff/scripts/open-codiff.mjs'), '--file', walkthroughFile, 'HEAD'],
-    {
-      cwd: workingDirectory,
-      env: {
-        ...logger.env,
-        CODIFF_COMMAND: logger.commandPath,
-        HOME: homePath,
-        OPENCODE_SESSION_DIRECTORY: realRepositoryPath,
-        PATH: logger.directory,
+  await expect(
+    execFileAsync(
+      process.execPath,
+      [
+        resolve('opencode/skills/codiff/scripts/open-codiff.mjs'),
+        '--file',
+        walkthroughFile,
+        'HEAD',
+      ],
+      {
+        cwd: workingDirectory,
+        env: {
+          ...logger.env,
+          CODIFF_COMMAND: logger.commandPath,
+          HOME: homePath,
+          OPENCODE_SESSION_DIRECTORY: realRepositoryPath,
+          OPENCODE_SESSION_ID: '',
+          PATH: logger.directory,
+        },
       },
-    },
-  );
-
-  expect(await logger.readArgs()).toEqual([
-    '-w',
-    '--agent',
-    'opencode',
-    '--walkthrough-file',
-    walkthroughFile,
-    '--opencode-session',
-    sessionId,
-    'HEAD',
-    realWorkingDirectory,
-  ]);
+    ),
+  ).rejects.toMatchObject({
+    stderr: expect.stringContaining('exact OpenCode session identity is unavailable'),
+    stdout: '',
+  });
 });
 
 test('packaged terminal helper forwards the agent and Claude session to Electron', async () => {
@@ -1453,6 +1872,11 @@ test('codiff --walkthrough-guide prints the guide and embedded schema, then exit
   expect(stdout).toContain('Narrative walkthrough — authoring guide');
   expect(stdout).toContain('chapters');
   expect(stdout).toContain('support');
+  expect(stdout).toContain('Codiff opened. Review feedback will arrive as a separate message');
+  expect(stdout).toContain('Address every comment in order');
+  const agentReviewSection = stdout.match(/## Agent Review Handoff[\s\S]*?(?=\n## )/)?.[0];
+  expect(agentReviewSection).toBeDefined();
+  expectAgentReviewDocumentation(agentReviewSection!);
   // ...followed by the live JSON schema, embedded as a fenced block.
   expect(stdout).toContain('```json');
   expect(stdout).toContain('"chapters"');

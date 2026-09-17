@@ -29,6 +29,7 @@ const resolveRepositoryRoot = (repositoryPath) => {
     return getRealPath(
       execFileSync('git', ['-C', resolvedPath, 'rev-parse', '--show-toplevel'], {
         encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
       }).trim(),
     );
   } catch {
@@ -200,9 +201,12 @@ const getWindowIdentity = (repositoryPath, launchOptions = {}) => {
   const sourceKey = implicitWalkthroughHead
     ? `commit:${implicitWalkthroughHead}`
     : getSourceKey(repositoryRoot, launchOptions.source);
+  const deliveryKey = launchOptions.agentReview
+    ? `\0agent-review:${launchOptions.agentReview.deliveryId}`
+    : '';
   return sourceKey
     ? {
-        key: `${repositoryRoot}\0${sourceKey}`,
+        key: `${repositoryRoot}\0${sourceKey}${deliveryKey}`,
         repositoryRoot,
         sourceKey,
       }
@@ -213,13 +217,16 @@ const getWindowIdentity = (repositoryPath, launchOptions = {}) => {
 const getWindowIdentityForSource = (repositoryPath, source) =>
   getWindowIdentity(repositoryPath, { source });
 
-/** @param {{root: string; source: ReviewSource}} state */
-const getWindowIdentityForRepositoryState = (state) => {
+/** @param {{root: string; source: ReviewSource}} state @param {Partial<CodiffLaunchOptions>} [launchOptions] */
+const getWindowIdentityForRepositoryState = (state, launchOptions = {}) => {
   const repositoryRoot = getRealPath(state.root);
   const sourceKey = getResolvedSourceKey(state.source);
+  const deliveryKey = launchOptions.agentReview
+    ? `\0agent-review:${launchOptions.agentReview.deliveryId}`
+    : '';
   return sourceKey
     ? {
-        key: `${repositoryRoot}\0${sourceKey}`,
+        key: `${repositoryRoot}\0${sourceKey}${deliveryKey}`,
         repositoryRoot,
         sourceKey,
       }
@@ -246,7 +253,9 @@ const findMatchingWindowIdentity = (identity, existingIdentities) => {
 
 module.exports = {
   findMatchingWindowIdentity,
+  getRealPath,
   getWindowIdentity,
   getWindowIdentityForRepositoryState,
   getWindowIdentityForSource,
+  resolveRepositoryRoot,
 };

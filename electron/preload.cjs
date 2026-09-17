@@ -138,6 +138,7 @@ const codiff = {
   openReleasePage: () => ipcRenderer.invoke('codiff:openReleasePage'),
   openFile: (path, lineNumber) => ipcRenderer.invoke('codiff:openFile', path, lineNumber),
   openRepositoryFolder: () => ipcRenderer.invoke('codiff:openRepositoryFolder'),
+  refreshAgentReviewDelivery: () => ipcRenderer.invoke('codiff:refreshAgentReviewDelivery'),
   resolvePullRequestUrl: (value) => ipcRenderer.invoke('codiff:resolvePullRequestUrl', value),
   setDiffStyle: (value) => ipcRenderer.invoke('codiff:setDiffStyle', value),
   setShowOutdated: (value) => ipcRenderer.invoke('codiff:setShowOutdated', value),
@@ -147,6 +148,8 @@ const codiff = {
   resetCodeFontSize: () => ipcRenderer.invoke('codiff:resetCodeFontSize'),
   saveMarkdownDocument: (request) => ipcRenderer.invoke('codiff:saveMarkdownDocument', request),
   savePlanReview: (review) => ipcRenderer.invoke('codiff:savePlanReview', review),
+  sendAgentReviewFeedback: (feedback) =>
+    ipcRenderer.invoke('codiff:sendAgentReviewFeedback', feedback),
   showInFolder: (path) => ipcRenderer.invoke('codiff:showInFolder', path),
   submitPullRequestComment: (request) =>
     ipcRenderer.invoke('codiff:submitPullRequestComment', request),

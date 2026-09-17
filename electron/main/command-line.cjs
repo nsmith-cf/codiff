@@ -114,6 +114,12 @@ const parseCommandLineArguments = (commandLine = process.argv) => {
       'apply-update': {
         type: 'boolean',
       },
+      'agent-review-delivery': {
+        type: 'string',
+      },
+      'agent-review-open-file': {
+        type: 'string',
+      },
       commit: {
         type: 'string',
       },
@@ -254,6 +260,12 @@ const parseCommandLineArguments = (commandLine = process.argv) => {
   const envPiSessionId = useEnvironment ? process.env.CODIFF_PI_SESSION_ID || '' : '';
   const envPlanFilePath = useEnvironment ? process.env.CODIFF_PLAN_FILE || '' : '';
   const envPlanResultFilePath = useEnvironment ? process.env.CODIFF_PLAN_RESULT_FILE || '' : '';
+  const envAgentReviewDeliveryId = useEnvironment
+    ? process.env.CODIFF_AGENT_REVIEW_DELIVERY_ID || ''
+    : '';
+  const envAgentReviewOpenFilePath = useEnvironment
+    ? process.env.CODIFF_AGENT_REVIEW_OPEN_FILE || ''
+    : '';
   const envAgentBackend = useEnvironment ? process.env.CODIFF_AGENT_BACKEND || '' : '';
   const envWalkthroughContextPath = useEnvironment
     ? process.env.CODIFF_WALKTHROUGH_CONTEXT || ''
@@ -280,6 +292,19 @@ const parseCommandLineArguments = (commandLine = process.argv) => {
     (typeof values['plan-result-file'] === 'string' ? values['plan-result-file'] : '') ||
     envPlanResultFilePath ||
     undefined;
+  const agentReviewDeliveryId =
+    (typeof values['agent-review-delivery'] === 'string' ? values['agent-review-delivery'] : '') ||
+    envAgentReviewDeliveryId;
+  const agentReviewOpenFilePath =
+    (typeof values['agent-review-open-file'] === 'string'
+      ? values['agent-review-open-file']
+      : '') || envAgentReviewOpenFilePath;
+  if (Boolean(agentReviewDeliveryId) !== Boolean(agentReviewOpenFilePath)) {
+    throw new Error('Agent review delivery and open file options must be used together.');
+  }
+  if (planResultFilePath && !planFilePath) {
+    throw new Error('A plan result handoff requires a plan file.');
+  }
   const rawAgentBackend =
     (typeof values.agent === 'string' ? values.agent : '') || envAgentBackend || '';
   const agentBackend =
@@ -289,6 +314,22 @@ const parseCommandLineArguments = (commandLine = process.argv) => {
     rawAgentBackend === 'pi'
       ? rawAgentBackend
       : undefined;
+  const agentReviewSessionId =
+    agentBackend === 'codex'
+      ? codexSessionId
+      : agentBackend === 'claude'
+        ? claudeSessionId
+        : agentBackend === 'opencode'
+          ? opencodeSessionId
+          : agentBackend === 'pi'
+            ? piSessionId
+            : undefined;
+  if (agentReviewDeliveryId && !agentReviewSessionId) {
+    throw new Error('Agent review delivery requires a matching agent backend and session.');
+  }
+  if (agentReviewDeliveryId && planFilePath) {
+    throw new Error('Plan and agent review handoffs cannot be used together.');
+  }
   const walkthroughContextPath =
     (typeof values['walkthrough-context'] === 'string' ? values['walkthrough-context'] : '') ||
     envWalkthroughContextPath ||
@@ -318,6 +359,12 @@ const parseCommandLineArguments = (commandLine = process.argv) => {
     launchOptions: {
       ...(values['apply-update'] === true ? { applyUpdate: true } : {}),
       ...(agentBackend ? { agentBackend } : {}),
+      ...(agentReviewDeliveryId && agentReviewOpenFilePath && agentReviewSessionId
+        ? {
+            agentReview: { deliveryId: agentReviewDeliveryId, sessionId: agentReviewSessionId },
+            agentReviewOpenFile: resolve(agentReviewOpenFilePath),
+          }
+        : {}),
       ...(claudeSessionId ? { claudeSessionId } : {}),
       ...(codexSessionId ? { codexSessionId } : {}),
       ...(opencodeSessionId ? { opencodeSessionId } : {}),

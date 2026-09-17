@@ -19,6 +19,7 @@ import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
+import { runAgentReviewLauncher } from '../../../../bin/agent-review-launch.js';
 
 const threadId = process.env.CODEX_THREAD_ID || '';
 const skillRoot = resolve(import.meta.dirname, '..');
@@ -390,14 +391,17 @@ const args = [
   ...forwardedArgs,
   ...(hasRepositoryTarget ? [] : [sessionCwd]),
 ];
-const result = spawnSync(codiffCommand.command, args, {
-  encoding: 'utf8',
-  stdio: 'inherit',
-});
-
-if (result.error) {
-  process.stderr.write(`${result.error.message}\n`);
-  process.exit(1);
+let exitCode = 0;
+try {
+  process.stdout.write(
+    runAgentReviewLauncher({
+      args,
+      command: codiffCommand.command,
+    }),
+  );
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  exitCode = Number.isInteger(error?.exitCode) ? error.exitCode : 1;
 }
 
-process.exit(result.status ?? 0);
+process.exitCode = exitCode;

@@ -20,6 +20,7 @@ const { findMatchingWindowIdentity, getWindowIdentity, getWindowIdentityForRepos
     getWindowIdentity: (
       repositoryPath: string,
       launchOptions?: {
+        agentReview?: { deliveryId: string; sessionId: string };
         source?:
           | { type: 'working-tree' }
           | { ref: string; type: 'branch' }
@@ -38,13 +39,16 @@ const { findMatchingWindowIdentity, getWindowIdentity, getWindowIdentityForRepos
         planResultFile?: string;
       },
     ) => { key: string; repositoryRoot: string; sourceKey: string } | null;
-    getWindowIdentityForRepositoryState: (state: {
-      root: string;
-      source:
-        | { type: 'working-tree' }
-        | { ref: string; type: 'commit' }
-        | { baseRef: string; headRef: string; ref: string; type: 'branch-diff' };
-    }) => { key: string; repositoryRoot: string; sourceKey: string } | null;
+    getWindowIdentityForRepositoryState: (
+      state: {
+        root: string;
+        source:
+          | { type: 'working-tree' }
+          | { ref: string; type: 'commit' }
+          | { baseRef: string; headRef: string; ref: string; type: 'branch-diff' };
+      },
+      launchOptions?: { agentReview?: { deliveryId: string; sessionId: string } },
+    ) => { key: string; repositoryRoot: string; sourceKey: string } | null;
   };
 
 const execFileAsync = promisify(execFile);
@@ -104,6 +108,21 @@ test('window identities match working-tree launches inside the same repository',
   expect(getWindowIdentity(nestedPath)?.key).toBe(getWindowIdentity(directory.path)?.key);
 });
 
+test('window identities distinguish agent review handoffs', async () => {
+  await using directory = await createTemporaryDirectory('codiff-window-identity-');
+  await initRepository(directory.path);
+
+  expect(
+    getWindowIdentity(directory.path, {
+      agentReview: { deliveryId: 'delivery-a', sessionId: 'session' },
+    })?.key,
+  ).not.toBe(
+    getWindowIdentity(directory.path, {
+      agentReview: { deliveryId: 'delivery-b', sessionId: 'session' },
+    })?.key,
+  );
+});
+
 test('window identities resolve commit refs to the same commit sha', async () => {
   await using directory = await createTemporaryDirectory('codiff-window-identity-');
   await initRepository(directory.path);
@@ -145,15 +164,23 @@ test(
     );
     await chmod(join(fakeBin.path, 'git'), 0o755);
 
-    expect(
-      getWindowIdentityForRepositoryState({
-        root: repository.path,
-        source: { ref: head, type: 'commit' },
-      }),
-    ).toMatchObject({
+    const state = {
+      root: repository.path,
+      source: { ref: head, type: 'commit' as const },
+    };
+    expect(getWindowIdentityForRepositoryState(state)).toMatchObject({
       repositoryRoot: await realpath(repository.path),
       sourceKey: `commit:${head}`,
     });
+    expect(
+      getWindowIdentityForRepositoryState(state, {
+        agentReview: { deliveryId: 'delivery-a', sessionId: 'session' },
+      })?.key,
+    ).not.toBe(
+      getWindowIdentityForRepositoryState(state, {
+        agentReview: { deliveryId: 'delivery-b', sessionId: 'session' },
+      })?.key,
+    );
     expect(await readFile(gitMarker, 'utf8').catch(() => null)).toBeNull();
   },
 );
